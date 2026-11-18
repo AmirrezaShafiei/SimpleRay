@@ -1,6 +1,6 @@
 # SimpleRay — Product Specification (v0.1)
 
-Status: DESIGN AGREED / IMPLEMENTATION PENDING
+Status: DESIGN AGREED / PHASE 1 UI SOURCE IMPLEMENTED (NATIVE QA PENDING) / PHASES 2–6 PENDING
 Platform: Windows desktop
 Product principle: elegant, extremely simple single-window Xray client; NO v2rayN-style overwhelming interface and NO left sidebar.
 This file reflects user decisions as of 2026-11-18; mockup data and sample ping values are illustrative only.
@@ -118,3 +118,9 @@ SimpleRay                                           [ _ ][ □ ][ X ]
 ```
 
 Latest user requests: **use the uploaded screenshot as visual reference** (with Source replacing Remarks); **sortable headers for all meaningful columns**; toolbar **Ping directly after Update**; **3 real-delay proxy probes averaged by default**, with option in Settings to switch the toolbar's Ping All to 1 probe. Subscription import **must allow naming**, and Source displays that name, while standalone configs show '—'. This specification is the source of truth for implementation. Work is split into controlled phases in [ROADMAP.md](ROADMAP.md); do not start a subsequent phase without the user's request.
+
+## Open-source backend references and license review
+
+- Planned runtime: https://github.com/XTLS/Xray-core (Mozilla Public License 2.0); integrate in Phase 3 with required license notices and redistribution review.
+- Additional architectural reference: https://github.com/v2fly/v2ray-core (MIT License); do not copy without checking license and attribution requirements.
+- Phase 1 embeds neither core or any proxy implementation. See [ARCHITECTURE.md](ARCHITECTURE.md) and [PHASE1_REPORT.md](PHASE1_REPORT.md).
