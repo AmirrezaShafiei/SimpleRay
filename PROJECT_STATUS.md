@@ -1,46 +1,56 @@
 # SimpleRay — Current Project Status / Handoff
 
 **Last updated:** 2026-11-18  
-**Repository:** `AmirrezaShafiei/SimpleRay` (private), branch `main`.
+**Repository:** `AmirrezaShafiei/SimpleRay` (private), branch `main`.  
+**Authoritative requirements:** [SPEC.md](SPEC.md). **Gated plan:** [ROADMAP.md](ROADMAP.md).
 
-## Status snapshot
-- **Phase 1:** Minimal Tauri2 desktop source, dark/light single-window UI, header sorting, search, favorites, visual reference. Code delivered; 10 tests passed in Phase1. Native Windows and actual browser visual QA still pending.
-- **Phase 2:** Config import, named subscription CRUD/refresh/persistence, `Source`, local saved configurations and native Rust clipboard/HTTP commands. **Source committed** as `77e7cea4621aec8808c37bf0f64ac4efc8feb12a`. **29/29 Node tests passing**; source syntax check passed. Windows native compilation and real online subscription fetch remain unverified.
-- **Phases 3–6 have NOT started.** There is no working proxy connection, real Ping, tray/startup handling or Windows installer yet.
+## Latest completed coding milestone
 
-## Next action
-Wait for an **explicit user request for Phase 3**. Before implementation, read [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [PHASE2_REPORT.md](PHASE2_REPORT.md). Do not assume Phase 3 is already implemented because source includes UI labels or native fetch IPC.
+**User explicitly requested both Phase 3 and Phase 4 in one turn.** Their source changes are recorded in commit [`d5df477`](https://github.com/AmirrezaShafiei/SimpleRay/commit/d5df47788a0b37c4726251efde72403eb8dba9c2); read [PHASE3_REPORT.md](PHASE3_REPORT.md), [PHASE4_REPORT.md](PHASE4_REPORT.md), and [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Authoritative design decisions
-- Reference screenshot in [design/reference.jpg](design/reference.jpg), subject to written deviations in [SPEC.md](SPEC.md).
-- One window, no left sidebar, Dark/Light/System themes, one **balanced** ON/OFF connection toggle (no extra Disconnect button).
-- Real downstream ↓ and upstream ↑ traffic rates appear beside connection toggle **only when connected** (Phase 3). Do not display fake traffic.
-- Table columns: Favorite, Name, Type, **numeric text-only colored latency** (never boxed), **Source**. Source is user-chosen subscription name; manual entry shows `—`.
-- Click each meaningful header to sort asc/desc; numeric latency, failed/unmeasured last; star, search, right-click actions.
-- Toolbar has **Ping directly after Update**. Phase 4 Ping All: **3 real HTTP-through-proxy probes averaged by default**, Settings allows 1. Single-node Ping from right-click.
-- Named subscription from Clipboard, update, rename, preserve last-good content on error, local CRUD and persistence. Start with Windows/Tray Phase 5. TUN beyond v0.1 scope.
+**43 / 43 Node unit and source-level static tests pass.** `npm run build` is *only* a JS/source checker and **does not produce a Windows executable**. Chromium browser smoke blocked by policy, Cargo/Rust toolchain unavailable in this environment. **Neither Xray connection nor the Windows System Proxy nor real-server Ping has been exercised end-to-end.** Never describe them as proven working in an installed app.
 
-## Phase table
+## Phase accounting
 
-| Phase | Scope | State |
+| Phase | Deliverable | Status |
 |---|---|---|
-| 1 | Desktop scaffold and approved single-window UI | Code delivered; native/browser QA pending |
-| 2 | Config URI import, named subscription CRUD/refresh, local persistence | Code committed; 29 Node tests pass; native Windows and real HTTP QA pending |
-| 3 | Xray-core, System Proxy, real connect/traffic | Not started — needs user request |
-| 4 | Real latency x1/x3 average, Ping All, numeric sort | Not started |
-| 5 | Tray, Start at Startup, settings polish | Not started |
-| 6 | Full QA, Windows installer, beta release | Not started |
+| 1 | Tauri2 skeleton, reference-based UI, light/dark, sorting | Source committed; Windows visual/native QA pending |
+| 2 | Clipboard parser, named subscriptions, refresh, local storage | Source committed; live native/HTTP QA pending |
+| 3 | Xray-core connection, WinINet System Proxy, stats traffic rates | **Source committed d5df477; runtime validation PENDING** |
+| 4 | HTTP-through-Xray real-delay Ping All (3 avg default / 1 optional), per-node Ping, sorting | **Source committed d5df477; runtime validation PENDING** |
+| 5 | Tray, Windows Start at Startup, settings polish | **Not started. Requires user instruction.** |
+| 6 | End-to-end QA, secure storage, Windows installer and beta | Not started |
 
-## Important current limits and risks
-- Local WebView storage is **plaintext** including configuration credentials and subscription tokens; consider encrypted OS-scoped persistence prior to public release. Never commit private configs/tokens.
-- VMess/VLESS/Trojan/Shadowsocks common share URIs and base64/plain subscription lists parsed; Clash YAML and sing-box JSON not supported.
-- Browser automation blocked by administrator policy (`ERR_BLOCKED_BY_ADMINISTRATOR`); Cargo/Rust unavailable here; do not claim native app built or tested.
-- No external third-party subscription end-to-end download verified.
-- V2Fly/V2Ray MIT and Xray-core MPL-2.0 were consulted as architectural references, no upstream code copied.
+## What's implemented in the code, not yet live-tested
+- `frontend/xray-config.js`: converts common VMess/VLESS/Trojan/Shadowsocks share URIs to a validated Xray outbound; TLS and REALITY plus supported transport variants, rejects unsupported modes.
+- `src-tauri/src/engine.rs`: runtime-managed Xray process, HTTPS 204 readiness test through proxy BEFORE setting WinINet, switching selected node, disconnect, Xray StatsService traffic-rate polling, independent Xray HTTP latency samples.
+- `src-tauri/src/system_proxy.rs`: per-user WinINet proxy snapshot, switch, restore and crash recovery.
+- `frontend/runtime.js`: latency averaging, status formatting, bounded/concurrent Ping All scheduler, cancel pending jobs. Main window native bridge uses those commands and does not report browser-preview fake connected state or latency.
+- `scripts/stage-xray.ps1`: requires independently downloaded official Xray archive + trusted SHA256; **no Xray executable bundled in the repository**.
 
-## Confirmed work
-- [PHASE1_REPORT.md](PHASE1_REPORT.md)
-- [PHASE2_REPORT.md](PHASE2_REPORT.md)
-- Phase2 implementation commit: [77e7cea](https://github.com/AmirrezaShafiei/SimpleRay/commit/77e7cea4621aec8808c37bf0f64ac4efc8feb12a)
+## UI decisions to preserve
+- Screenshot: [design/reference.jpg](design/reference.jpg). Single window, **no left sidebar**, Dark/Light/System.
+- One compact connect/disconnect toggle; real ↓ download and ↑ upload **rates beside toggle only when connected**. No separate Disconnect button.
+- Main columns: star, Name, Type, numeric **unboxed** colored Latency, **Source** (subscription user-chosen name; manual = —).
+- Every meaningful table header clickable for ascending/descending sort, search, favorites, right-click menu.
+- Ping All toolbar control **directly after Update**; 3 separate proxy HTTP requests averaged by default, optional 1 in settings. Single-server ping ×1 / ×3 in right-click.
+- Clipboard share links, subscription naming, update, rename, delete, persistent selection and favorites; System Proxy (not TUN).
 
-After any new phase, update this file with implemented features, actual tests, known bugs, commit link and next phase gate.
+## Critical outstanding risks and acceptance work
+1. **Compile the native Rust/Tauri app on Windows** and fix any compiler errors or API version mismatches; this has not been performed.
+2. Obtain verified, current official `xray.exe`; stage with `scripts/stage-xray.ps1`; verify Xray CLI configuration, API StatsService behavior, real server connect/switch/disconnect and actual throughput in a Windows environment. Check HTTP 204 probe reachability.
+3. Verify WinINet registry changes, proxy snapshot/restore/crash recovery and interactions with external proxy settings. System Proxy affects only proxy-aware traffic; TUN is deferred.
+4. Test actual real-delay ×1/×3, partial failures, Ping All concurrency and latency persistence with live, non-sensitive test servers.
+5. **Security blocker before public beta:** Phase 2 profile URI/password/subscription tokens remain plaintext in WebView localStorage; move to secure OS-level storage/encryption prior to distribution.
+6. Phase 5 tray and startup behaviors are **not implemented**. Phase 6 Windows installer is **not built**. No beta or release artifact exists.
+
+## Next user action / continuation in new chat
+Wait for an explicit user instruction, e.g. **"فاز ۵ رو انجام بده"**. The user authorized only Phases 3 and 4 this turn; stop here. Before moving on, read [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), both phase reports and current code, and note that Windows native QA from previous phases still needs resolution. Never present unverified live connectivity as tested.
+
+## Links
+- [Phase 3 report](PHASE3_REPORT.md)
+- [Phase 4 report](PHASE4_REPORT.md)
+- [Current architecture](ARCHITECTURE.md)
+- [Implementation commit](https://github.com/AmirrezaShafiei/SimpleRay/commit/d5df47788a0b37c4726251efde72403eb8dba9c2)
+- [Phase 2 report](PHASE2_REPORT.md)
+
