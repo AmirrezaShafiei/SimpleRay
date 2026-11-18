@@ -1,7 +1,7 @@
 # SimpleRay — Phased Implementation Plan
 
-**Status (2026-11-18): Phase 1–2 source delivered; Phase 3 and Phase 4 source committed together by explicit user request, 43/43 Node tests pass. Native Windows build, Xray connectivity, proxy changes and real Ping are NOT verified. Phase 5–6 not started.**
-**Working rule:** Execute only explicitly requested phase(s). The user explicitly authorized Phase 3 and Phase 4 together in the 2026-11-18 session. At the end of that phase, commit changes, document tests/issues, show concrete results, and stop. Do **not** start the following phase without the user's next instruction. Keep [SPEC.md](SPEC.md) as the design/behavior source of truth.
+**Status (2026-11-18): Phase 1–2 source delivered; Phase 3 and Phase 4 source committed together by explicit user request, 43/43 Node tests pass. Native Windows build, Xray connectivity, proxy changes and real Ping are NOT verified. Phases 5 and 6 now have source code, reports and a Windows beta workflow (verification pending).**
+**Working rule:** Execute only explicitly requested phase(s). The user authorized Phases 3 and 4 together, and then Phases 5 and 6 together, in the 2026-11-18 session. At the end of that phase, commit changes, document tests/issues, show concrete results, and stop. Do **not** start the following phase without the user's next instruction. Keep [SPEC.md](SPEC.md) as the design/behavior source of truth.
 
 **Visual baseline:** user-uploaded image `SimpleRay VPN Server Dashboard(1).png` shared in the planning conversation, plus changes in SPEC.md (Source replaces Remarks, no separate Disconnect, Ping next to Update, sortable table, dark/light themes). Implement a faithful UI rather than redesigning it.
 
@@ -73,3 +73,12 @@ TUN, split tunneling, elaborate rules editor, browser extension, a left sidebar,
 - Not verified: Chromium click-through/visual screenshots (ERR_BLOCKED_BY_ADMINISTRATOR for local/file URLs) and native Tauri/Windows compilation (Rust/Cargo toolchain unavailable here).
 - The checked-in design image is [design/reference.jpg](design/reference.jpg). Read [PHASE1_REPORT.md](PHASE1_REPORT.md) for precise test and limitation details. No native installer or real proxy functionality was produced.
 - Phase 1 code delivery is complete, but Windows visual QA remains an open quality gate. Phase 2 was explicitly requested and its source was delivered. Do not begin Phase 3 unless explicitly instructed.
+
+## Phase 5/6 delivery log — 2026-11-18
+
+- Phase 5 native shell and settings: tray, close-to-tray, user startup, separate auto-connect, guarded proxy cleanup. See [PHASE5_REPORT.md](PHASE5_REPORT.md).
+- Phase 6 source QA + Windows build pipeline, pinned official Xray-core staging/digest, NSIS and conditional GitHub prerelease. See [PHASE6_REPORT.md](PHASE6_REPORT.md) and [.github/workflows/windows-beta.yml](.github/workflows/windows-beta.yml).
+- Local checks: **51/51 Node tests passed**, `npm run build` JS/source/version checks passed.
+- Windows GitHub Actions run: [44382246461](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44382246461). **Installer must not be declared available until actual successful workflow and release asset are verified.**
+- Still open: Windows native runtime/real-server/manual tray QA, unsigned installer trust warning, plaintext user secrets in WebView storage requiring encrypted persistence before general public release.
+- User-requested phase implementation source is delivered; the project remains **beta-validation pending**, not production-ready.
