@@ -1,6 +1,6 @@
 # SimpleRay — Phased Implementation Plan
 
-**Status (2026-11-18): Phase 1 source implemented; native Windows and browser visual QA pending. Phases 2–6 not started.**
+**Status (2026-11-18): Phase 1 and Phase 2 source code delivered. Phase 2 has 29 passing Node tests; native Windows QA is pending. Phases 3–6 not started.**
 **Working rule:** Execute *exactly one phase per explicit user request*. At the end of that phase, commit changes, document tests/issues, show concrete results, and stop. Do **not** start the following phase without the user's next instruction. Keep [SPEC.md](SPEC.md) as the design/behavior source of truth.
 
 **Visual baseline:** user-uploaded image `SimpleRay VPN Server Dashboard(1).png` shared in the planning conversation, plus changes in SPEC.md (Source replaces Remarks, no separate Disconnect, Ping next to Update, sortable table, dark/light themes). Implement a faithful UI rather than redesigning it.
@@ -68,4 +68,4 @@ TUN, split tunneling, elaborate rules editor, browser extension, a left sidebar,
 - Verified: npm test 10/10 passing; npm run build (frontend source and JavaScript syntax check) passing; local Node HTTP dev server served index with HTTP 200.
 - Not verified: Chromium click-through/visual screenshots (ERR_BLOCKED_BY_ADMINISTRATOR for local/file URLs) and native Tauri/Windows compilation (Rust/Cargo toolchain unavailable here).
 - The checked-in design image is [design/reference.jpg](design/reference.jpg). Read [PHASE1_REPORT.md](PHASE1_REPORT.md) for precise test and limitation details. No native installer or real proxy functionality was produced.
-- Phase 1 code delivery is complete, but Windows visual QA remains an open quality gate. Do not begin Phase 2 unless explicitly instructed.
+- Phase 1 code delivery is complete, but Windows visual QA remains an open quality gate. Phase 2 was explicitly requested and its source was delivered. Do not begin Phase 3 unless explicitly instructed.
