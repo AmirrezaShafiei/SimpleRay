@@ -117,7 +117,7 @@ SimpleRay                                           [ _ ][ □ ][ X ]
 [System Proxy: ON]    [tray status if needed]
 ```
 
-Latest user requests: **use the uploaded screenshot as visual reference** (with Source replacing Remarks); **sortable headers for all meaningful columns**; toolbar **Ping directly after Update**; **3 real-delay proxy probes averaged by default**, with option in Settings to switch the toolbar's Ping All to 1 probe. Subscription import **must allow naming**, and Source displays that name, while standalone configs show '—'. This specification is the source of truth for implementation. Work is split into controlled phases in [ROADMAP.md](ROADMAP.md); do not start a subsequent phase without the user's request.
+Latest user requests: **use the uploaded screenshot as visual reference** (with Source replacing Remarks); **sortable headers for all meaningful columns**; toolbar **Ping directly after Update**; **3 real-delay proxy probes averaged by default**, with option in Settings to switch the toolbar's Ping All to 1 probe. Subscription import **must allow naming**, and Source displays that name, while standalone configs show '—'. This specification remains the source of truth for implementation. Phase 2 code and test details are in [PHASE2_REPORT.md](PHASE2_REPORT.md); work is split into controlled phases in [ROADMAP.md](ROADMAP.md). Do not start a subsequent phase without the user's request.
 
 ## Open-source backend references and license review
 
