@@ -1,7 +1,7 @@
 # SimpleRay — Phased Implementation Plan
 
-**Status (2026-11-18): Phase 1 and Phase 2 source code delivered. Phase 2 has 29 passing Node tests; native Windows QA is pending. Phases 3–6 not started.**
-**Working rule:** Execute *exactly one phase per explicit user request*. At the end of that phase, commit changes, document tests/issues, show concrete results, and stop. Do **not** start the following phase without the user's next instruction. Keep [SPEC.md](SPEC.md) as the design/behavior source of truth.
+**Status (2026-11-18): Phase 1–2 source delivered; Phase 3 and Phase 4 source committed together by explicit user request, 43/43 Node tests pass. Native Windows build, Xray connectivity, proxy changes and real Ping are NOT verified. Phase 5–6 not started.**
+**Working rule:** Execute only explicitly requested phase(s). The user explicitly authorized Phase 3 and Phase 4 together in the 2026-11-18 session. At the end of that phase, commit changes, document tests/issues, show concrete results, and stop. Do **not** start the following phase without the user's next instruction. Keep [SPEC.md](SPEC.md) as the design/behavior source of truth.
 
 **Visual baseline:** user-uploaded image `SimpleRay VPN Server Dashboard(1).png` shared in the planning conversation, plus changes in SPEC.md (Source replaces Remarks, no separate Disconnect, Ping next to Update, sortable table, dark/light themes). Implement a faithful UI rather than redesigning it.
 
@@ -22,7 +22,7 @@
 - Implement refresh of one / all subscriptions with last-good fallback, stable selection/favorites, safe deletion behavior.
 **Acceptance:** restart preserves entries, favorites, selection, subscription names; update adds/removes nodes correctly without erasing standalone configs; errors do not expose credentials.
 
-**Phase 2 checkpoint:** Implemented and committed in `77e7cea4621aec8808c37bf0f64ac4efc8feb12a`. Node tests 29/29 pass; native Windows build and live subscription fetch not yet verified. Phase 3 must not start without user request.
+**Phase 2 checkpoint:** Implemented and committed in `77e7cea4621aec8808c37bf0f64ac4efc8feb12a`. Node tests 29/29 pass; native Windows build and live subscription fetch not yet verified. The user subsequently authorized phases 3 and 4 together.
 
 ## Phase 3 — Live Xray connection and traffic
 - Integrate packaged Xray-core; generate/check valid runtime config for supported options and protocols.
@@ -31,12 +31,16 @@
 - Display actual measured download ↓ and upload ↑ **rates beside the main toggle only when connected**; correct units/zero state.
 **Acceptance:** real supported test configs connect; Windows system proxy correctly follows client state; failed connects report an error; traffic values derive from measured counters instead of mock data.
 
+**Phase 3 checkpoint:** Source [committed](https://github.com/AmirrezaShafiei/SimpleRay/commit/d5df47788a0b37c4726251efde72403eb8dba9c2). Includes Xray subprocess manager, HTTPS-through-proxy readiness test, WinINet per-user proxy snapshot/recovery, Xray StatsService traffic display and fallback handling. 43/43 Node/static tests pass overall. **Not accepted as live-verified** until Windows Rust build, official staged core, actual server and registry integration are tested. See [PHASE3_REPORT.md](PHASE3_REPORT.md).
+
 ## Phase 4 — Real-delay Ping + sorting
 - Toolbar **Ping** next to Update tests all servers, default **3 separate through-proxy HTTP real-delay probes per server**, displaying the successful-sample average. Setting changes toolbar behavior to 1 attempt.
 - Right-click on one node exposes explicit **Ping ×1** and **Ping ×3 (Average)** independently.
 - Bounded concurrency; timeouts and partial failures labeled truthfully; cancel support as practical.
 - Numeric text-only latency colors, no badges/boxes; sort with missing/failed entries last, both directions; distinguish HTTP real-delay from ICMP RTT.
 **Acceptance:** compare captured test results with displayed average; x1 setting persists; Ping All doesn't hang UI; latency sort is numeric and correct.
+
+**Phase 4 checkpoint:** Source [committed](https://github.com/AmirrezaShafiei/SimpleRay/commit/d5df47788a0b37c4726251efde72403eb8dba9c2). Includes per-server temporary Xray proxy, HTTP 204 real-delay x1/x3 averaged, Ping All concurrency 3, cancellation of pending work, partial failures, persistence and sort. JS tests pass, **live Xray and real-server Ping remain unverified**. See [PHASE4_REPORT.md](PHASE4_REPORT.md).
 
 ## Phase 5 — System integration and quality-of-life
 - System Tray: closing window hides by default, explicit Exit stops core and cleans proxy; show/open/quit/context actions.
