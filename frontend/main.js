@@ -9,7 +9,41 @@ const safeLoad=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch
 const pref=safeLoad();
 const repo=createRepository(localStorage);
 const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:['dark','light','system'].includes(pref.theme)?pref.theme:'system',pingSamples:pref.pingSamples===1?1:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+// Native desktop preferences belong to Rust so close-to-tray also works
+// when the WebView is hidden. Browser-only preview keeps these disabled.
+const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
 let toastTimeout;
+function renderDesktopSettings(){
+  for (const [id,checked] of [['trayToggle',desktop.minimizeToTray],['autoConnectToggle',desktop.autoConnect],['startupToggle',desktop.startup]]){
+    const input=$(id);input.checked=Boolean(checked);input.disabled=!nativeHost()||desktop.loading;
+    input.title=nativeHost()?'':'Available in the native Windows client';
+  }
+  $('startupStatus').textContent=desktop.startup?'On':'Off';
+}
+async function readDesktopSettings(){
+  renderDesktopSettings();if(!nativeHost())return;
+  try{
+    const [settings,startup]=await Promise.all([nativeInvoke('get_desktop_settings'),nativeInvoke('get_autostart_enabled')]);
+    desktop.minimizeToTray=Boolean(settings.minimizeToTray);
+    desktop.autoConnect=Boolean(settings.autoConnect);
+    desktop.startup=Boolean(startup);
+    renderDesktopSettings();
+    if(desktop.autoConnect&&state.selected&&state.connection.state!=='connected')await connectSelected();
+  }catch(err){toast(errorMessage(err))}
+}
+async function changeDesktopSetting(field,value){
+  if(!nativeHost())return;
+  const old=desktop[field]; desktop[field]=value;desktop.loading=true;renderDesktopSettings();
+  try{
+    if(field==='startup')desktop.startup=Boolean(await nativeInvoke('set_autostart_enabled',{enabled:value}));
+    else{
+      const next=await nativeInvoke('set_desktop_settings',{preferences:{minimizeToTray:desktop.minimizeToTray,autoConnect:desktop.autoConnect}});
+      desktop.minimizeToTray=Boolean(next.minimizeToTray);desktop.autoConnect=Boolean(next.autoConnect);
+    }
+  }catch(err){desktop[field]=old;toast(errorMessage(err))}
+  finally{desktop.loading=false;renderDesktopSettings()}
+}
+
 function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,pingSamples:state.pingSamples}))}catch{toast('Unable to save theme or Ping preferences')}}
 function toast(message){const el=$('toast');el.textContent=String(message);el.classList.add('visible');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('visible'),3800)}
 function errorMessage(e){return e instanceof Error?e.message:String(e||'Operation failed')}
@@ -146,7 +180,8 @@ async function importClipboard(){let text;try{text=await readClipboardText()}cat
 }
 function init(){if(nativeHost())document.documentElement.classList.add('native-host');applyTheme();$('pingSamples').value=String(state.pingSamples);sync();if(repo.loadError)toast(repo.loadError);
   if(!nativeHost()){$('phaseStatus').textContent='Browser preview';$('runtimeNotice').textContent='Real connection and Ping require the Windows desktop host';}
-  else{void refreshConnectionStatus({silent:true});setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
+  else{void refreshConnectionStatus({silent:true}).then(()=>readDesktopSettings());setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
+  renderDesktopSettings();
   window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(state.theme==='system')applyTheme()});
   document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'?'desc':'asc'}render()}));
   $('searchInput').addEventListener('input',e=>{state.query=e.target.value;render()});
@@ -164,6 +199,11 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   $('updateButton').addEventListener('click',()=>void updateAll());
   $('pingAllButton').addEventListener('click',()=>void pingServers(state.servers,state.pingSamples));
   $('settingsButton').addEventListener('click',()=>showDialog('settingsDialog'));
+  $('startupToggle').addEventListener('change',e=>void changeDesktopSetting('startup',e.target.checked));
+  $('trayToggle').addEventListener('change',e=>void changeDesktopSetting('minimizeToTray',e.target.checked));
+  $('autoConnectToggle').addEventListener('change',e=>void changeDesktopSetting('autoConnect',e.target.checked));
+  window.addEventListener('simpleray:tray-toggle',()=>void toggleConnection());
+  window.addEventListener('simpleray:exit-blocked',()=>toast('Cannot exit safely: System Proxy restoration failed. Restore Windows proxy settings before forcing exit.'));
   $('settingsClose').addEventListener('click',()=>$('settingsDialog').close());
   for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close());
   $('themeSelect').addEventListener('change',e=>{state.theme=e.target.value;applyTheme();persist()});
