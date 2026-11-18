@@ -1,55 +1,34 @@
-# SimpleRay — Windows Proxy Client
+# SimpleRay
 
-Minimal single-window V2Ray/Xray client in active development, with the approved reference layout at [design/reference.jpg](design/reference.jpg).
+Minimal, single-window Windows desktop proxy client built on Tauri and Xray-core.
 
-**Current stage:** Phase 1 UI foundation and Phase 2 configuration/subscription management **source code committed**. Connection, System Proxy, live traffic, real Ping, tray and startup integration, Windows installer are **not yet implemented or tested**.
+> **Status:** Phase 1/2 interface and configuration logic, Phase 3/4 Xray integration and HTTP real-delay source are implemented. **No verified native Windows build or installer yet. Do not treat the existing source as an installed production client.**
 
-## Phase 2 features implemented in source
-- Clipboard Paste for one/multiple VMess, VLESS, Trojan, Shadowsocks share links; common base64-encoded subscription contents.
-- Add manual URI and optional name, edit, duplicate, delete; stars, search, sort by every header, selected server persistence.
-- Add subscription with mandatory **display name** and HTTP(S) URL; rename, refresh one/all, delete subscription with **keep imported servers or delete them**.
-- Server table **Source** = subscription display name, **—** for standalone configurations. Updates preserve favorites, selected server and IDs when identity matches; preserve last good nodes on failed refresh. Deleting a subscribed node hides it from subsequent refreshes.
-- Native Tauri Rust clipboard and bounded HTTP subscription fetch commands (max 2 MB, network timeouts). Browser preview uses Clipboard API and fetch where permitted.
-- Theme Dark / Light / System, no left sidebar, no fake connection or latency claims. Ping button directly beside Update remains a Phase 4 placeholder.
+## Features implemented in source
+- Single-window Dark/Light themes; no sidebar
+- Clipboard import, named subscriptions and refresh, Source column, favorites, search, sort, editing/duplication/removal
+- One balanced connection switch for on/off and double-click server switching
+- Xray-core subprocess validation + real proxied 204 preflight before WinINet System Proxy takeover; clean disconnect and recovery logic
+- Measured traffic upload/download bytes/s via Xray StatsService (not sample data)
+- Main Ping button next to Update, default 3 real-delay HTTPS samples/average or 1 sample in Settings, per-node right-click ×1/×3, text-only latency colors
 
-## Run / verify
+## Local Windows setup (development, requires validation)
+1. Install Windows Rust toolchain, MSVC Build Tools, Node.js, and Tauri prerequisites/WebView2.
+2. Download the Xray-core Windows release from the official https://github.com/XTLS/Xray-core/releases and independently verify its SHA256.
+3. Stage the verified archive with `powershell -ExecutionPolicy Bypass -File scripts/stage-xray.ps1 -Archive C:\\Downloads\\Xray-windows-64.zip -Sha256 <your-verified-hash>`; `xray.exe` is intentionally gitignored.
+4. Run `npm install`, then `npm run desktop:dev` from the repository root.
+5. Run `npm test` (43 JS/static tests) and `npm run build` (syntax/source checker only). `npm run desktop:build` is a native build and requires a working Windows toolchain and a properly bundled Xray binary before distributing.
 
-Requirements: Node.js 20+. For desktop also install Rust/Cargo, Microsoft C++ build tools, and WebView2 on Windows.
+## Limitations
+- Windows System Proxy is WinINet HTTP/HTTPS only, not transparent TUN.
+- LocalStorage currently holds plaintext profile secrets from Phase 2; encrypted storage is not yet implemented.
+- Not every Xray share-link option is supported. Unknown options may be rejected to avoid false connectivity.
+- Live Windows Tauri/Xray process and registry integration cannot be claimed tested in the current build environment.
+- Tray, Windows startup, final settings and packaging are reserved for Phases 5 and 6.
 
-```bash
-npm install
-npm run dev
-npm test
-npm run build
-npm run desktop:dev
-```
+## Handoff
+Read [PROJECT_STATUS.md](PROJECT_STATUS.md), [ROADMAP.md](ROADMAP.md), [SPEC.md](SPEC.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PHASE3_REPORT.md](PHASE3_REPORT.md), and [PHASE4_REPORT.md](PHASE4_REPORT.md). Continue only when the user explicitly requests another phase.
 
-- `npm run dev`: local frontend preview (http://127.0.0.1:1420).
-- `npm test`: **29/29 passing Node unit/static tests** as of Phase 2.
-- `npm run build`: JavaScript syntax/source checks ONLY (not an installer).
-- `npm run desktop:dev`: invokes Tauri on Windows, **not yet tested/verified** in current environment.
-- Browser interactive Playwright test attempted but blocked by `ERR_BLOCKED_BY_ADMINISTRATOR`; see [PHASE2_REPORT.md](PHASE2_REPORT.md).
-- Windows Rust/Cargo compile and actual third-party subscription fetch have not been verified.
-
-## Critical security caveat
-
-Subscription URLs/tokens and server connection URIs are currently saved as **plaintext local WebView storage**. Do **not** commit real subscriptions, tokens or credentials. Before public beta consider replacing this with OS user-scoped encryption (for Windows, DPAPI).
-
-## Project continuity
-- [PROJECT_STATUS.md](PROJECT_STATUS.md): current handoff, risks, verified tests, next action.
-- [SPEC.md](SPEC.md): source of truth for user-approved behavior and aesthetic.
-- [ROADMAP.md](ROADMAP.md): six phase gates, **exactly one phase per explicit user request**.
-- [PHASE2_REPORT.md](PHASE2_REPORT.md): detailed Phase 2 work and testing, unverified items.
-- [PHASE1_REPORT.md](PHASE1_REPORT.md): initial UI source work and tests.
-- [ARCHITECTURE.md](ARCHITECTURE.md): modules, license references and data flow.
-
-## Technical modules
-- `frontend/config.js`: protocol/share-link parsers.
-- `frontend/store.js`: transactional persistent config and subscription repository.
-- `frontend/main.js`, `index.html`, `styles.css`: one-window UI, forms and context actions.
-- `src-tauri/src/lib.rs`: local clipboard + subscription fetch commands.
-- `tests/`: unit and static UI tests.
-
-No core protocol implementation has been copied from other projects. Planned runtime: Xray-core (MPL-2.0); reference: V2Fly/V2Ray (MIT). See [ARCHITECTURE.md](ARCHITECTURE.md).
-
-**Next phase (only when authorized):** Phase 3 — live Xray-core, correct System Proxy lifecycle, compact single toggle and real up/down traffic metrics.
+## References
+Xray-core (MPL 2.0): https://github.com/XTLS/Xray-core  
+V2Fly (MIT): https://github.com/v2fly/v2ray-core

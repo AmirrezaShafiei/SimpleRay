@@ -1,0 +1,31 @@
+/** Shared connection/ping view logic. Pure functions make UI behavior testable. */
+export function bytesPerSecond(value){
+  if(!Number.isFinite(value)||value<0)return '—';
+  if(value<1024)return `${Math.round(value)} B/s`;
+  const units=['KB/s','MB/s','GB/s','TB/s'];let x=value/1024,i=0;
+  while(x>=1024&&i<units.length-1){x/=1024;i++}
+  return `${x.toFixed(x>=100?0:x>=10?1:2)} ${units[i]}`;
+}
+export function normalizedLatencyResult(result,samples){
+  const attempted=Number(result?.attempted)||samples;
+  const successful=Number(result?.successful)||0;
+  const average=Number(result?.averageMs);
+  if(!successful||!Number.isFinite(average)||average<0)return {latency:null,latencyStatus:'timeout',latencySuccess:0,latencyAttempted:attempted};
+  return {latency:Math.round(average),latencyStatus:successful<attempted?'partial':'ok',latencySuccess:successful,latencyAttempted:attempted};
+}
+export async function pingPool(servers,samples,runOne,onProgress,{concurrency=3,shouldStop=()=>false}={}){
+  if(![1,3].includes(samples))throw new Error('Ping count must be 1 or 3');
+  const list=[...servers];let next=0,finished=0;
+  const workers=Array.from({length:Math.min(concurrency,list.length)},async()=>{
+    while(!shouldStop()){
+      const index=next++;if(index>=list.length)break;
+      const server=list[index];let result;
+      try{result=normalizedLatencyResult(await runOne(server,samples),samples)}
+      catch(_){result={latency:null,latencyStatus:'error',latencySuccess:0,latencyAttempted:samples}}
+      finished++;
+      onProgress?.(server,result,finished,list.length);
+    }
+  });
+  await Promise.all(workers);
+  return {finished,total:list.length,cancelled:shouldStop()};
+}

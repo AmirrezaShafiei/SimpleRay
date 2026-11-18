@@ -32,3 +32,11 @@
 .no-servers .latency-current{opacity:.5}.no-servers .selected-server{cursor:default}
 .tool-button:disabled{opacity:.5;cursor:not-allowed}.inline-action{color:var(--blue);font-size:12px;text-decoration:underline;cursor:pointer}
 @media(max-width:780px){.toolbar-left{flex-wrap:wrap}.paste-menu{min-width:220px}.connection-panel{min-height:120px}}
+
+/* Phase 3/4 connection: one balanced switch; never show a second Disconnect button. */
+.connection-panel.connecting{border-color:var(--selectedBorder);}
+.connection-panel.connecting .state-led{background:var(--yellow);box-shadow:0 0 12px #d9a54866;}
+.toggle:disabled{opacity:.64;cursor:not-allowed;}
+.toggle:disabled:hover{filter:none;}
+#downRate,#upRate{font-variant-numeric:tabular-nums;min-width:70px;}
+#pingAllButton[aria-busy=true]{border-color:var(--selectedBorder);}

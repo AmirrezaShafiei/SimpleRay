@@ -1,10 +1,8 @@
 node_modules/
 src-tauri/target/
 src-tauri/gen/
+src-tauri/binaries/*.exe
+.env*
 .DS_Store
 *.log
-.env
-.env.*
-!.env.example
-.idea/
-.vscode/
+*.bak

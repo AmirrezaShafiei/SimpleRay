@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "SimpleRay",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "identifier": "io.simpleray.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -10,7 +10,7 @@
     "frontendDist": "../frontend"
   },
   "app": {
-    "windows": [{"title":"SimpleRay · Phase 2","width":1320,"height":850,"minWidth":980,"minHeight":640,"center":true,"backgroundColor":"#0b1221"}],
+    "windows": [{"title":"SimpleRay","width":1320,"height":850,"minWidth":980,"minHeight":640,"center":true,"backgroundColor":"#0b1221"}],
     "security": {"csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' http: https:; object-src 'none'; frame-src 'none'"}
   },
   "bundle": {"active":true,"targets":["nsis"],"icon":["icons/icon.ico","icons/icon.png"]}

@@ -6,4 +6,4 @@ test('Paste/Update/Ping fixed ordering and modal manager',()=>{
  assert.ok(html.indexOf('id="updateButton"')<html.indexOf('id="pingAllButton"'));
  for(const id of ['manualDialog','subscriptionDialog','manageDialog','subscriptionName','subscriptionUrl','subscriptionList'])assert.ok(html.includes(`id="${id}"`));
 });
-test('no fake live connection or latency',()=>{assert.match(main,/disabled=true/);assert.match(main,/Phase 3/);assert.match(main,/Phase 4/);assert.doesNotMatch(css,/\.latency-text\{[^}]*background:/)});
+test('native runtime only, no fake live connection or latency',()=>{assert.match(main,/!nativeHost\(\)/);assert.match(main,/connect_server/);assert.match(main,/measure_server_latency/);assert.doesNotMatch(css,/\.latency-text\{[^}]*background:/)});

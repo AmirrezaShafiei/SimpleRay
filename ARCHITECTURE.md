@@ -1,26 +1,33 @@
-# SimpleRay architecture
+# SimpleRay architecture (Phases 1–4 source)
 
-## Phase 2 — live code structure
-- `frontend/index.html`, `styles.css`: single-window approved UI; theme selector, server list, dialogs and contexts.
-- `frontend/main.js`: UI controller and event handlers; no real Xray runtime yet.
-- `frontend/model.js`: pure search/sort/latency-color functions.
-- `frontend/config.js`: pure VMess/VLESS/Trojan/Shadowsocks share-link parser and subscription payload decoder. No network I/O or DOM dependencies.
-- `frontend/store.js`: repository with transactional localStorage persistence, stable subscription IDs, update/rename/hidden-node preservation, CRUD and favorites.
-- `src-tauri/src/lib.rs`: two Rust IPC commands: clipboard reader and HTTP(S) subscription fetch (limits, no logging of URL secrets).
-- `tests/`: 29 passing Node built-in `node:test` cases. Browser smoke script is optional (environment blocked).
+## UI
+- Static ES modules served by Tauri WebView, with Dark/Light theme, single window, sortable server table, context actions, and no sidebar.
+- `frontend/config.js` parses canonical URIs, `frontend/store.js` manages subscription/node persistence in localStorage.
+- `frontend/xray-config.js` maps canonical share URLs to restricted Xray outbound JSON. `frontend/runtime.js` provides pure latency pooling/aggregation and rate formatting.
+- `frontend/main.js` uses native Tauri commands (via `window.__TAURI_INTERNALS__.invoke`) for connection, status and real latency; browser preview does not fake results.
 
-## Data flow
-Clipboard -> `parseImport()` -> manual records OR subscription naming modal -> `addSubscription()` -> `fetch_subscription_text` native IPC -> `parseSubscriptionPayload()` -> `refreshSubscription()` -> localStorage -> list view.
+## Native Rust
+- `src-tauri/src/lib.rs`: Tauri command handlers and startup recovery / exit cleanup.
+- `src-tauri/src/engine.rs`: Xray binary resolution, temporary config building, validation, child process lifecycle, proxy-through-core HTTPS 204 probe, StatsService readings, separate per-node latency probes.
+- `src-tauri/src/system_proxy.rs`: Windows WinINet per-user System Proxy snapshot/override/recovery. On other OSes active proxy mode returns an error; product target is Windows.
+- Subscription fetch and system clipboard remain in Rust.
 
-Stored record fields include `uri` (the share link, including credentials), protocol type, host, port, display name, favorite, signature, stable ID, subscriptionId and latency placeholder; subscription records include user-display name, private URL, last update/error, hidden signatures and ID. `Source` is derived via subscriptionId rather than copied into each record.
+## Engine binary
+- Xray-core is Mozilla Public License 2.0. The Xray executable is NOT included in the repo and needs to be staged from an official, independently verified release.
+- To run on Windows (with Rust, WebView2, Visual Studio build tools, Node installed): verify an official Windows archive SHA256 and run `scripts/stage-xray.ps1`, then `npm install` and `npm run desktop:dev`. For local development an absolute `SIMPLERAY_XRAY_PATH` env path is also accepted.
+- Do not commit binaries, personal configs, access tokens, subscription URLs or third-party secrets to GitHub.
 
-## Security assumptions
-Stored URIs and subscription URLs are plaintext in WebView localStorage. Never log or commit real tokens. During public beta preparation, consider per-user OS encryption (DPAPI) and validation of download TLS policies. User input is rendered with `textContent`, not inserted as `innerHTML`.
+## Safety and honest states
+- Native connection reports connected only after `Xray run -test`, local HTTP readiness, and successful proxied HTTPS 204 preflight, followed by system proxy takeover.
+- A failing switch does not intentionally terminate the previous active connection.
+- Live bytes/s are derived from Xray StatsService; unavailable stats show `—`.
+- Browser mode is a preview, not a real VPN, and has no native proxy integration.
+- LocalStorage secrets remain plaintext at rest: protect them with an OS-backed encrypted store before release.
 
-## Phase boundaries
-Phase 2 cannot connect to proxy servers or measure real latency. Phase 3 will integrate Xray-core as an external packaged runtime; Phase 4 implements HTTP real-delay probes; Phase 5 tray/startup; Phase 6 Windows packaging and release.
-
-## Reference licenses
-Xray-core MPL-2.0: https://github.com/XTLS/Xray-core/blob/main/LICENSE
-V2Fly/V2Ray MIT: https://github.com/v2fly/v2ray-core/blob/master/LICENSE
-Only patterns and public documentation have been consulted: no upstream implementation code has been copied.
+## Upstream open source documentation
+- https://github.com/XTLS/Xray-core — MPL-2.0
+- https://github.com/v2fly/v2ray-core — MIT; architectural reference only
+- https://xtls.github.io/en/config/api.html
+- https://xtls.github.io/en/config/stats.html
+- https://xtls.github.io/en/config/transport.html
+- https://tauri.app/develop/sidecar/ (reference; app uses native Rust process ownership instead)

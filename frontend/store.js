@@ -47,6 +47,17 @@ export function createRepository(storage,{idFactory=id}={}){
     snapshot,rows,
     setSelected(serverId){return transact(next=>{if(!next.servers.some(s=>s.id===serverId))throw new Error('Server not found');next.selectedId=serverId})},
     toggleFavorite(serverId){return transact(next=>{const s=next.servers.find(x=>x.id===serverId);if(!s)throw new Error('Server not found');s.favorite=!s.favorite})},
+    setLatency(serverId,{latency,latencyStatus,latencySuccess,latencyAttempted}){
+      if(latency!==null && (!Number.isInteger(latency)||latency<0||latency>999999))throw new Error('Invalid latency value');
+      return transact(next=>{
+        const s=next.servers.find(x=>x.id===serverId);
+        if(!s)throw new Error('Server not found');
+        s.latency=latency;
+        s.latencyStatus=String(latencyStatus||'unknown').slice(0,20);
+        s.latencySuccess=Number(latencySuccess)||0;
+        s.latencyAttempted=Number(latencyAttempted)||0;
+      });
+    },
     importManual(text){
       const result=parseImport(text);
       if(result.servers.length){transact(next=>{
@@ -112,7 +123,7 @@ export function createRepository(storage,{idFactory=id}={}){
         for(const data of parsed.servers){
           if(subscription.hiddenSignatures.includes(data.signature)||imported.has(data.signature))continue;
           const old=existing.get(data.signature);
-          const server={...data,id:old?.id||idFactory(),subscriptionId,favorite:old?.favorite||false,latency:old?.latency??null};
+          const server={...data,id:old?.id||idFactory(),subscriptionId,favorite:old?.favorite||false,latency:old?.latency??null,latencyStatus:old?.latencyStatus||'unknown',latencySuccess:old?.latencySuccess||0,latencyAttempted:old?.latencyAttempted||0};
           imported.set(data.signature,server);
           if(old)retained++;else added++;
         }

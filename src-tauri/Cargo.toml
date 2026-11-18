@@ -1,7 +1,7 @@
 [package]
 name = "simpleray"
-version = "0.1.0"
-description = "SimpleRay minimal desktop client"
+version = "0.3.0"
+description = "SimpleRay minimal Windows Xray client"
 authors = ["SimpleRay contributors"]
 license = "MIT"
 edition = "2021"
@@ -16,7 +16,12 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-
-# Phase 2 native subscription fetch and clipboard support.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 arboard = "3.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "net", "time", "sync", "rt"] }
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
