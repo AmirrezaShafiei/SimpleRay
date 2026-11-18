@@ -1,6 +1,6 @@
 # SimpleRay — Handoff / Project Status
 
-Last planning update: 2026-11-18
+Last implementation update: 2026-11-18
 
 ## Current state
 - **Phase 1 UI source implemented, 10/10 frontend unit/static tests passing; Windows native and browser visual QA pending. Phases 2–6 not started.**
@@ -28,11 +28,18 @@ Phase 1 has been implemented as an interactive source/UI preview. Wait for an ex
 | Phase | Deliverable | State |
 |:---:|---|---|
 | 1 | Desktop skeleton + faithful Dark/Light UI, sortable demo table | Implemented; 10 tests pass; native/visual QA pending |
-| 2 | Config/subscription import, naming, update, persistence | Not started |
-| 3 | Xray connection, System Proxy, live traffic | Not started |
+| 2 | Config/subscription import, naming, update, persistence | Code committed; 29 Node tests passed; Windows QA pending |
+| 3 | Xray connection, System Proxy, live traffic | Not started — user request required |
 | 4 | Real latency ping ×1/×3 average and sorting tests | Not started |
 | 5 | Tray, Windows startup, settings and polish | Not started |
 | 6 | QA, installer, beta release | Not started |
+
+## Phase 2 handoff
+- Technical and test details: [PHASE2_REPORT.md](PHASE2_REPORT.md).
+- New modules: `frontend/config.js` (parsers), `frontend/store.js` (transactional persistence), `frontend/main.js` (UI), `src-tauri/src/lib.rs` (clipboard + bounded subscription HTTP fetch).
+- Local storage is plaintext, including credentials/tokens; native secure storage is a future security improvement and must be reviewed before release.
+- Browser automation blocked by the current environment administrator policy; Rust/Cargo unavailable here. Do not claim compiled Windows success.
+- Official V2Fly/V2Ray (MIT) and Xray-core (MPL-2.0) are protocol architecture references; no upstream implementation source copied.
 
 ## After each phase
 Update the table above with concrete results, commit SHA, verified test outcomes, outstanding bugs, and state of the *next* phase. Never mark a task completed based on a mockup or plan.
