@@ -1,0 +1,91 @@
+name: SimpleRay Windows beta (candidate)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'src-tauri/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'package.json'
+      - '.github/workflows/windows-beta.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-beta:
+    runs-on: windows-2022
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Install JavaScript build dependencies
+        run: npm install --no-audit --no-fund
+      - name: Test JavaScript modules and UI structure
+        run: npm test
+      - name: Check source and version consistency
+        run: npm run build
+      - name: Fetch pinned official Xray-core for Windows x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = 'v26.11.9'
+          $file = 'Xray-windows-64.zip'
+          $expectedSha256 = '1262522266337b824f07beb8e1375786b437683b3890105469088f8e17e0a69d'
+          $url = "https://github.com/XTLS/Xray-core/releases/download/$version/$file"
+          Invoke-WebRequest -Uri $url -OutFile $file
+          Invoke-WebRequest -Uri "$url.dgst" -OutFile "$file.dgst"
+          if (!(Get-Content "$file.dgst" -Raw).ToLowerInvariant().Contains($expectedSha256)) { throw 'Official Xray digest manifest disagrees with pinned SHA256' }
+          $found = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($found -ne $expectedSha256) { throw "Pinned Xray archive SHA256 mismatch: $found" }
+          New-Item -ItemType Directory -Force src-tauri/binaries,src-tauri/licenses | Out-Null
+          Expand-Archive -LiteralPath $file -DestinationPath official-xray
+          foreach ($asset in @('xray.exe','geoip.dat','geosite.dat')) {
+            $foundAsset = Get-ChildItem -Path official-xray -File -Recurse -Filter $asset | Select-Object -First 1
+            if (!$foundAsset) { throw "Expected official Xray asset missing: $asset" }
+            Copy-Item $foundAsset.FullName "src-tauri/binaries/$asset"
+          }
+          $license = Get-ChildItem -Path official-xray -File -Recurse | Where-Object { $_.Name -match '^LICENSE(\.md|\.txt)?$' } | Select-Object -First 1
+          if (!$license) { throw 'Official Xray license missing from release archive' }
+          Copy-Item $license.FullName 'src-tauri/licenses/XRAY-LICENSE.txt' -Force
+          & 'src-tauri/binaries/xray.exe' version
+      - name: Validate official Xray API configuration shape
+        shell: pwsh
+        run: |
+          & 'src-tauri/binaries/xray.exe' run -test -config 'tests/fixtures/xray-api.json'
+          if ($LASTEXITCODE -ne 0) { throw 'Xray rejected sample core configuration' }
+      - name: Compile and test Rust native code
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build Windows NSIS installer
+        run: npm run desktop:build
+      - name: Attach installer to this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleRay-v0.5.0-beta.1-Windows-x64-unsigned
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish beta pre-release after successful build and tests
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version='v0.5.0-beta.1'
+          $installers = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis' -Filter '*.exe' -File
+          if (!$installers) { throw 'No NSIS installer to publish' }
+          gh release view $version 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $version $installers[0].FullName --clobber
+          } else {
+            gh release create $version $installers[0].FullName --title 'SimpleRay v0.5.0-beta.1 (unsigned Windows beta)' --prerelease --notes 'Unsigned pre-release. Automated JS/Rust tests and Windows build passed; connecting to real user servers, crash recovery, tray/startup usability, and secret-at-rest protections still require manual Windows QA. For personal testing only. Contains independently licensed Xray-core v26.11.9 (MPL-2.0).'
+          }
