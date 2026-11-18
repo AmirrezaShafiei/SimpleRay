@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Minimal Windows Xray client — Phase 1 desktop UI skeleton",
+  "description": "Minimal Windows Xray client — Phase 2 local configuration/subscription manager",
   "scripts": {
     "dev": "node scripts/serve.mjs",
     "build": "node scripts/check.mjs",

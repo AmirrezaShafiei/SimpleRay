@@ -1,20 +1,26 @@
-# Architecture and upstream references
+# SimpleRay architecture
 
-## Phase 1
-Frontend: vanilla HTML, CSS and native JavaScript modules with a standalone Node static development server; no third-party UI dependency. Host: Tauri 2 Rust shell for Windows desktop. Tests: Node built-in test runner and Chromium browser automation. The preview works on localhost without Tauri for visual and interaction verification.
+## Phase 2 — live code structure
+- `frontend/index.html`, `styles.css`: single-window approved UI; theme selector, server list, dialogs and contexts.
+- `frontend/main.js`: UI controller and event handlers; no real Xray runtime yet.
+- `frontend/model.js`: pure search/sort/latency-color functions.
+- `frontend/config.js`: pure VMess/VLESS/Trojan/Shadowsocks share-link parser and subscription payload decoder. No network I/O or DOM dependencies.
+- `frontend/store.js`: repository with transactional localStorage persistence, stable subscription IDs, update/rename/hidden-node preservation, CRUD and favorites.
+- `src-tauri/src/lib.rs`: two Rust IPC commands: clipboard reader and HTTP(S) subscription fetch (limits, no logging of URL secrets).
+- `tests/`: 29 passing Node built-in `node:test` cases. Browser smoke script is optional (environment blocked).
 
-## Future phases
-- Phase 2: configuration/subscription parsing with redaction, local data persistence and stable subscription IDs.
-- Phase 3: process management, core configuration generation, real state machine, local listening endpoint and System Proxy integration.
-- Phase 4: real HTTP delay checks routed through each proxy, bounded concurrency, 3-sample average default, single sample option.
-- Phase 5: tray, startup and OS cleanup.
+## Data flow
+Clipboard -> `parseImport()` -> manual records OR subscription naming modal -> `addSubscription()` -> `fetch_subscription_text` native IPC -> `parseSubscriptionPayload()` -> `refreshSubscription()` -> localStorage -> list view.
 
-## Open-source reference policy
-- Xray-core: https://github.com/XTLS/Xray-core (MPL-2.0), intended runtime for production. Keep its license and required notices, and comply with MPL 2.0 if copying/modifying covered files.
-- V2Fly/V2Ray core: https://github.com/v2fly/v2ray-core (MIT), useful reference for architecture and proxy behavior where compatible; do not paste code without appropriate attribution/license handling.
-- Tauri: https://v2.tauri.app/ — native shell and window integration.
-- These are upstream references: **Phase 1 includes no Xray or V2Ray core code/binaries and performs no proxy operations**.
-- Before redistributing, recheck the license for every binary/dependency and any third-party assets.
+Stored record fields include `uri` (the share link, including credentials), protocol type, host, port, display name, favorite, signature, stable ID, subscriptionId and latency placeholder; subscription records include user-display name, private URL, last update/error, hidden signatures and ID. `Source` is derived via subscriptionId rather than copied into each record.
 
-## Limitations
-This environment has Node/Chromium but no Rust/Cargo nor Windows build tools. Frontend tests and browser UI checks are possible here; a native Windows build has not been verified. This project does not package a real core or Windows executable in Phase 1.
+## Security assumptions
+Stored URIs and subscription URLs are plaintext in WebView localStorage. Never log or commit real tokens. During public beta preparation, consider per-user OS encryption (DPAPI) and validation of download TLS policies. User input is rendered with `textContent`, not inserted as `innerHTML`.
+
+## Phase boundaries
+Phase 2 cannot connect to proxy servers or measure real latency. Phase 3 will integrate Xray-core as an external packaged runtime; Phase 4 implements HTTP real-delay probes; Phase 5 tray/startup; Phase 6 Windows packaging and release.
+
+## Reference licenses
+Xray-core MPL-2.0: https://github.com/XTLS/Xray-core/blob/main/LICENSE
+V2Fly/V2Ray MIT: https://github.com/v2fly/v2ray-core/blob/master/LICENSE
+Only patterns and public documentation have been consulted: no upstream implementation code has been copied.

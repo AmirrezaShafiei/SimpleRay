@@ -16,3 +16,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+
+# Phase 2 native subscription fetch and clipboard support.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+arboard = "3.4"

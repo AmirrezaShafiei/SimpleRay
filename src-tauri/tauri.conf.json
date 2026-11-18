@@ -10,8 +10,8 @@
     "frontendDist": "../frontend"
   },
   "app": {
-    "windows": [{"title":"SimpleRay · Phase 1 Preview","width":1320,"height":850,"minWidth":980,"minHeight":640,"center":true,"backgroundColor":"#0b1221"}],
-    "security": {"csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'"}
+    "windows": [{"title":"SimpleRay · Phase 2","width":1320,"height":850,"minWidth":980,"minHeight":640,"center":true,"backgroundColor":"#0b1221"}],
+    "security": {"csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' http: https:; object-src 'none'; frame-src 'none'"}
   },
   "bundle": {"active":true,"targets":["nsis"],"icon":["icons/icon.ico","icons/icon.png"]}
 }

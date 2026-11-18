@@ -19,7 +19,7 @@ test('all five sortable headers exist',()=>{
   for(const col of ['favorite','name','type','latency','source'])assert.match(html,new RegExp('data-sort="'+col+'"'));
 });
 test('theme, settings, preview warnings and non-executable controls present',()=>{
-  for(const v of ['value="dark"','value="light"','value="system"','id="settingsButton"','No proxy connection','id="contextMenu"'])assert.ok(html.includes(v),v);
+  for(const v of ['value="dark"','value="light"','value="system"','id="settingsButton"','Connection and real Ping are not active yet','id="contextMenu"'])assert.ok(html.includes(v),v);
   assert.match(js,/Phase 4/);
   assert.match(css,/\.latency-good\{color:var\(--green\)\}/);
   assert.doesNotMatch(css,/\.latency-text\{[^}]*background:/);

@@ -11,4 +11,4 @@ const server=createServer(async(req,res)=>{
     const data=await readFile(full);res.writeHead(200,{'content-type':mime[extname(full)]||'application/octet-stream','x-content-type-options':'nosniff'});res.end(data);
   }catch{res.writeHead(404);res.end('Not found')}
 });
-server.listen(1420,'127.0.0.1',()=>console.log('SimpleRay Phase 1 preview: http://127.0.0.1:1420'));
+server.listen(1420,'127.0.0.1',()=>console.log('SimpleRay Phase 2 preview: http://127.0.0.1:1420'));
