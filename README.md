@@ -19,11 +19,25 @@ One compact window with **no left navigation/sidebar**. No oversized connection 
 - While connected, live download (↓) and upload (↑) rates adjacent to the connection control
 - System Proxy, tray operation, Start with Windows, theme settings via gear icon
 
-The authoritative feature requirements, behavior details and exclusions live in [SPEC.md](SPEC.md).
+**Continuation guide:** Start with [PROJECT_STATUS.md](PROJECT_STATUS.md), then read [SPEC.md](SPEC.md) (authoritative requirements) and [ROADMAP.md](ROADMAP.md) (six phased delivery gates). The user will explicitly choose when to implement each phase. Do not skip phases or expand scope without agreement.
+
+**UI reference:** Use the user's screenshot shared in the Nov 18 planning chat, titled `SimpleRay VPN Server Dashboard(1).png`, as the main visual reference. It shows a single window, large clear but balanced top-left connection switch, inline traffic rates, dark background, simple row list, right-click context menu and compact header. Changes from screenshot: **Source instead of Remarks**, **Ping button directly beside Update**, **all table headers sortable**, **theme Dark/Light**, **Ping All default 3 real-delay samples averaged (Settings optionally 1)**. No sidebar, no redundant Disconnect control, no boxed latency values.
+
+The specification is fully documented in [SPEC.md](SPEC.md).
+
+## Delivery plan
+1. Foundation and faithful UI
+2. Configuration import, subscription naming, refresh and storage
+3. Live Xray connection, proxy and real-time traffic
+4. Actual proxy HTTP latency, 3-sample average, sorting
+5. Windows tray/startup/settings and quality-of-life
+6. QA, installer and beta release
+
+**Only implement one phase when explicitly requested.** After each phase, commit and document tested results and known issues, then stop.
 
 ## Status checklist
 - [x] Agree on the product layout and features
-- [x] Save specification
+- [x] Save specification and phase roadmap
 - [ ] Scaffold desktop application
 - [ ] Implement clipboard and subscription parsing
 - [ ] Integrate Xray-core
