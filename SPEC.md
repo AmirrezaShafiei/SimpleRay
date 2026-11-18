@@ -4,6 +4,7 @@ Status: DESIGN AGREED / IMPLEMENTATION PENDING
 Platform: Windows desktop
 Product principle: elegant, extremely simple single-window Xray client; NO v2rayN-style overwhelming interface and NO left sidebar.
 This file reflects user decisions as of 2026-11-18; mockup data and sample ping values are illustrative only.
+**Visual reference:** the user-supplied single-window screenshot titled `SimpleRay VPN Server Dashboard(1).png` in the planning conversation. Preserve its overall dark-mode aesthetic, spacing, layout hierarchy, compact connection toggle, traffic arrows, toolbar and table. It is a visual mockup, not evidence of a running client. Implement a corresponding Light theme. In the implementation replace the screenshot's `Remarks` column with `Source`.
 
 ## Scope and implementation
 - Use the maintained Xray-core runtime for supported proxy protocols, rather than reimplementing protocols or cryptography.
@@ -20,9 +21,10 @@ This file reflects user decisions as of 2026-11-18; mockup data and sample ping 
 - Connected state is clearly indicated (green), disconnected state neutral, connecting/reconnecting states visibly distinct; never claim connected merely because a process was started.
 - Live traffic next to main connection control **only while connected**: downward green arrow for DOWNLOAD rate and upward blue arrow for UPLOAD rate (e.g. MB/s, adaptive units); avoid duplicating those metrics unnecessarily elsewhere. Show graceful zeros if no activity.
 - Header also shows selected server name + protocol and current connection status.
-- Compact action toolbar: Paste (clipboard) with optional menu, Update Subscription, Add (if needed), Delete selected (if needed), Search, and gear icon for Settings.
+- Compact action toolbar: Paste (clipboard) with optional menu, Update Subscription, **Ping All directly next to Update**, Search, and gear icon for Settings. Add/Delete may be in the contextual actions rather than cluttering the toolbar.
 - The **Ping Selected** button must NOT exist. Its action belongs in the row context menu.
-- A single **Ping All (×3 / Average)** action is allowed in a compact toolbar menu; no excess permanent buttons.
+- Main-toolbar **Ping** button tests ALL configurations; default performs **three real HTTP-delayed connection probes per server and displays their average**. Its default count can be changed from 3 to 1 in Settings. Keep only one Ping toolbar button.
+- The user's reference image is the single-window visual baseline. No left sidebar, no second Dis/Connect button, and no large boxed latency chips.
 - Keep bottom status line minimal (system proxy status, optional startup/tray state), with no redundant connection information.
 
 ## Server list / data model
@@ -39,11 +41,12 @@ This file reflects user decisions as of 2026-11-18; mockup data and sample ping 
 - Favorited servers are denoted by clickable stars and remain favorited after app restart; subscription refresh should preserve favorites/selection where matching is possible.
 - Optional location flag based on reliable server metadata/name; never treat guessed country as authoritative.
 - Selecting a row is separate from initiating connection. Double-click: select and connect or switch to that server.
-- Sort by latency ascending/descending, and optionally name/favorites; unknown/timeouts sort last. Search by server name/type/source, case-insensitive.
+- All meaningful table column headers must be clickable to sort both ascending and descending (repeat click toggles the direction; show the active arrow). Apply this to **Favorite (starred vs unstarred), Name, Type, Latency (numeric), and Source**. Keep current sort stable when other values tie; unknown/unmeasured latency sorts last in either direction. Search by server name/type/source, case-insensitive.
 
 ## Latency measurement
 - Test **single server** from right-click menu: Ping (×1), Ping (×3) — Average.
-- Test **all servers** from one unobtrusive toolbar option: 3 probe attempts per server, calculate average of successful samples, show per-server progress and results.
+- Test **all servers** by clicking the toolbar **Ping** button positioned immediately beside **Update**. DEFAULT: perform 3 real-delay HTTP tests THROUGH each proxy and display average of successful probes for each server. SETTINGS OPTION: global Ping All probe count 3 (default) or 1. Single-server right-click menu continues to offer explicit x1 and x3 independently of the default.
+- Show per-server progress and sample-count on partial success. All-server ping should have bounded concurrency and be cancelable when possible.
 - Proxy-level HTTP connectivity/latency tests THROUGH EACH CONFIG, **not just ICMP** to the server IP.
 - Bound concurrency and per-probe timeout; a partial success should clearly show successful sample count (e.g., '2/3'); all failures become 'Timeout' / 'Failed'.
 - Do not confuse an HTTP test response time with physical ICMP RTT; UI can label it 'Latency'.
@@ -79,6 +82,7 @@ No dedicated Ping Selected toolbar button.
 - Minimize to tray: toggle, closing the main window should hide to tray while core stays running by default; explicit Exit from tray terminates app/core and cleans proxy settings.
 - Optional: auto-connect at startup (separate from start-with-Windows; OFF by default)
 - System Proxy mode on/off and local listen ports where needed.
+- **Ping All count:** 3 measurements + average (default) OR 1 measurement; persist choice and apply to the toolbar button. Keep 3x averaging behavior clear to avoid falsely showing an average from one attempt.
 - Future advanced settings can live here; do not clutter main UI.
 
 ## Reliability, privacy & quality gates
@@ -105,7 +109,7 @@ No dedicated Ping Selected toolbar button.
 ```
 SimpleRay                                           [ _ ][ □ ][ X ]
 [compact connect switch] Connected • VMess / Selected server   ↓ Down   ↑ Up     [⚙]
-[Paste ▾] [Update] [Add] [Delete]     [Search servers...] [Ping All ▾]
+[Paste ▾] [Update] [Ping All]    [Search servers...]   [⚙]
 ★  Name                  Type        Latency (Avg.)       Source
 ☆  Germany 01            VMess       68 ms                Daily Nodes
 ★  Backup                Trojan      211 ms               —
@@ -113,4 +117,4 @@ SimpleRay                                           [ _ ][ □ ][ X ]
 [System Proxy: ON]    [tray status if needed]
 ```
 
-User-requested final correction: Replace Remarks column with Source. Subscription import **must allow naming**, and Source displays that name, while standalone configs show '—'. This specification is the source of truth for implementation.
+Latest user requests: **use the uploaded screenshot as visual reference** (with Source replacing Remarks); **sortable headers for all meaningful columns**; toolbar **Ping directly after Update**; **3 real-delay proxy probes averaged by default**, with option in Settings to switch the toolbar's Ping All to 1 probe. Subscription import **must allow naming**, and Source displays that name, while standalone configs show '—'. This specification is the source of truth for implementation. Work is split into controlled phases in [ROADMAP.md](ROADMAP.md); do not start a subsequent phase without the user's request.
