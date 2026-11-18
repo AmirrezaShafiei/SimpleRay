@@ -1,52 +1,43 @@
-# SimpleRay
+# SimpleRay — Phase 1 UI
 
-Minimal, elegant Windows desktop client powered by Xray-core.
+Minimal Windows Xray client in development. **This is only a working UI preview with demo server rows; it does not route traffic, connect, ping or modify system proxy.**
 
-> **Status:** Planning / specification. App code and installer are not yet implemented.
+## Run the interactive visual preview
 
-## Product goal
-One compact window with **no left navigation/sidebar**. No oversized connection controls or overwhelming advanced settings. Both Dark and Light themes.
+Requires Node.js 20+:
 
-## Planned features
-- Clipboard import of proxy links and subscription URLs
-- User-named subscriptions; server list **Source** column shows the subscription name, or **—** for independent configs
-- Subscription updates and server management
-- VMess, VLESS, Trojan, Shadowsocks via Xray-core
-- Single-server Ping (×1), Ping (×3 average) via right-click, and Ping All
-- Latency sort (ascending/descending); numeric latency color only (no latency badge boxes)
-- Favorites, search, context menu, server select and switch
-- One balanced ON/OFF switch for both connect and disconnect
-- While connected, live download (↓) and upload (↑) rates adjacent to the connection control
-- System Proxy, tray operation, Start with Windows, theme settings via gear icon
+```bash
+npm run dev
+```
 
-**Continuation guide:** Start with [PROJECT_STATUS.md](PROJECT_STATUS.md), then read [SPEC.md](SPEC.md) (authoritative requirements) and [ROADMAP.md](ROADMAP.md) (six phased delivery gates). The user will explicitly choose when to implement each phase. Do not skip phases or expand scope without agreement.
+Open http://127.0.0.1:1420 in a browser. This frontend contains no external font, CDN or UI library dependency.
 
-**UI reference:** Use the user's screenshot shared in the Nov 18 planning chat, titled `SimpleRay VPN Server Dashboard(1).png`, as the main visual reference. It shows a single window, large clear but balanced top-left connection switch, inline traffic rates, dark background, simple row list, right-click context menu and compact header. Changes from screenshot: **Source instead of Remarks**, **Ping button directly beside Update**, **all table headers sortable**, **theme Dark/Light**, **Ping All default 3 real-delay samples averaged (Settings optionally 1)**. No sidebar, no redundant Disconnect control, no boxed latency values.
+## Run tests
 
-The specification is fully documented in [SPEC.md](SPEC.md).
+```bash
+npm test
+npm run build
+```
 
-## Delivery plan
-1. Foundation and faithful UI
-2. Configuration import, subscription naming, refresh and storage
-3. Live Xray connection, proxy and real-time traffic
-4. Actual proxy HTTP latency, 3-sample average, sorting
-5. Windows tray/startup/settings and quality-of-life
-6. QA, installer and beta release
+`npm run build` currently checks frontend source layout/syntax, not Rust compilation. For Windows desktop development, install Rust, Microsoft C++ build tools, WebView2 (on supported Windows installations) and dependencies:
 
-**Only implement one phase when explicitly requested.** After each phase, commit and document tested results and known issues, then stop.
+```bash
+npm install
+npm run desktop:dev
+```
 
-## Status checklist
-- [x] Agree on the product layout and features
-- [x] Save specification and phase roadmap
-- [ ] Scaffold desktop application
-- [ ] Implement clipboard and subscription parsing
-- [ ] Integrate Xray-core
-- [ ] Implement connection state, tray and system proxy
-- [ ] Implement HTTP-based latency testing, average and sort
-- [ ] Implement Dark/Light themes and UI polish
-- [ ] Windows installer + smoke tests
+Windows native builds are **not verified in this environment**. An installer and connection engine are planned for later phases.
 
-## Security
-Do not commit actual connection URIs, tokens, proxy credentials, subscription URLs, or logs that may contain secrets.
+## Phase 1 delivered UI behavior
+- One window, reference-style dark and light themes (also Follow System), settings modal and local preference persistence.
+- Single small connection switch that switches **preview state only**; no disconnected/connected claims without explicit preview annotation.
+- Server table populated with **demo data**, Star, Name, Type, latency (color text, no background), Source.
+- Clicking any table header toggles sort, including numeric latency and favorite; missing latency sorted last.
+- Search filters across server name, protocol and subscription Source; single-click select, double-click preview state; right-click menu.
+- Ping All next to Update, single-server Ping in row context menu. Both show planned-phase notifications; no fake latency measurements.
+- Footer shows proxy as Inactive and startup as planned, avoiding fake OS integration.
 
-No live connections are implemented yet. Example designs are mockups, not actual running application screenshots.
+Full plan: [ROADMAP.md](ROADMAP.md) · [SPEC.md](SPEC.md) · [PROJECT_STATUS.md](PROJECT_STATUS.md).
+
+## License references
+Consult [ARCHITECTURE.md](ARCHITECTURE.md) for upstream V2Ray/Xray license and integration notes.

@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {DEMO_SERVERS,filterServers,sortServers,latencyClass} from '../frontend/model.js';
+test('fixtures have expected fields and standalone source em dash',()=>{assert.equal(DEMO_SERVERS.length,7);assert.ok(DEMO_SERVERS.some(s=>s.source==='—'));assert.ok(DEMO_SERVERS.every(s=>s.id&&s.name&&s.type&&s.source))});
+test('sorting works ascending and descending for all five headers',()=>{for(const key of ['favorite','name','type','latency','source']){const a=sortServers(DEMO_SERVERS,key,'asc'),b=sortServers(DEMO_SERVERS,key,'desc');assert.equal(a.length,7);assert.equal(b.length,7);assert.notDeepEqual(a.map(s=>s.id),b.map(s=>s.id),key)}});
+test('latency numeric sort and missing always last',()=>{const rows=[{name:'slow',latency:300},{name:'unmeasured',latency:null},{name:'fast',latency:30},{name:'timeout',latency:NaN},{name:'middle',latency:110}];assert.deepEqual(sortServers(rows,'latency','asc').map(s=>s.name),['fast','middle','slow','unmeasured','timeout']);assert.deepEqual(sortServers(rows,'latency','desc').map(s=>s.name),['slow','middle','fast','unmeasured','timeout'])});
+test('natural alphanumeric server name sorting',()=>{const r=[{name:'Server 10'},{name:'Server 2'}];assert.deepEqual(sortServers(r,'name').map(s=>s.name),['Server 2','Server 10'])});
+test('search checks name, protocol and source case-insensitively',()=>{assert.equal(filterServers(DEMO_SERVERS,'GERMany').length,1);assert.equal(filterServers(DEMO_SERVERS,'vmess').length,3);assert.equal(filterServers(DEMO_SERVERS,'backup').length,1);assert.equal(filterServers(DEMO_SERVERS,'does-not-exist').length,0)});
+test('latency is classed as unboxed colored text',()=>{assert.equal(latencyClass(68),'latency-good');assert.equal(latencyClass(138),'latency-ok');assert.equal(latencyClass(211),'latency-slow');assert.equal(latencyClass(289),'latency-bad');assert.equal(latencyClass(null),'latency-unknown')});
