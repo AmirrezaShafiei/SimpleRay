@@ -28,6 +28,10 @@ npm run desktop:dev
 
 Windows native builds are **not verified in this environment**. An installer and connection engine are planned for later phases.
 
+## Visual reference
+
+The agreed design screenshot is checked in at [design/reference.jpg](design/reference.jpg). It shows the layout we emulate. Its `Remarks` field is replaced with `Source`, and the toolbar includes Ping directly beside Update.
+
 ## Phase 1 delivered UI behavior
 - One window, reference-style dark and light themes (also Follow System), settings modal and local preference persistence.
 - Single small connection switch that switches **preview state only**; no disconnected/connected claims without explicit preview annotation.
@@ -37,7 +41,7 @@ Windows native builds are **not verified in this environment**. An installer and
 - Ping All next to Update, single-server Ping in row context menu. Both show planned-phase notifications; no fake latency measurements.
 - Footer shows proxy as Inactive and startup as planned, avoiding fake OS integration.
 
-Full plan: [ROADMAP.md](ROADMAP.md) · [SPEC.md](SPEC.md) · [PROJECT_STATUS.md](PROJECT_STATUS.md).
+For test results and limitations, see [PHASE1_REPORT.md](PHASE1_REPORT.md). The phase plan and requirements are in [ROADMAP.md](ROADMAP.md), [SPEC.md](SPEC.md), and [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
 ## License references
 Consult [ARCHITECTURE.md](ARCHITECTURE.md) for upstream V2Ray/Xray license and integration notes.
