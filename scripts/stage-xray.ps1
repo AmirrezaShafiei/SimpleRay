@@ -20,6 +20,11 @@ try {
     $target = Join-Path $PSScriptRoot '..\src-tauri\binaries\xray.exe'
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
     Copy-Item -LiteralPath $exe.FullName -Destination $target -Force
+    $license = Get-ChildItem -LiteralPath $temp -Filter 'LICENSE*' -File -Recurse | Select-Object -First 1
+    if ($license) {
+        $licenseTarget = Join-Path $PSScriptRoot '..\src-tauri\licenses\XRAY-LICENSE.txt'
+        Copy-Item -LiteralPath $license.FullName -Destination $licenseTarget -Force
+    }
     Write-Host "Verified Xray-core staged at $target"
     Write-Host 'Run npm run desktop:dev to test the native app on Windows.'
 } finally {

@@ -40,3 +40,10 @@
 .toggle:disabled:hover{filter:none;}
 #downRate,#upRate{font-variant-numeric:tabular-nums;min-width:70px;}
 #pingAllButton[aria-busy=true]{border-color:var(--selectedBorder);}
+
+/* Phase 5: minimalist OS integration preferences; no new navigation panel. */
+.setting-line input[type=checkbox]{appearance:none;width:42px;height:24px;flex-shrink:0;border-radius:24px;border:1px solid var(--border);background:var(--subtle);position:relative;cursor:pointer;transition:background .16s ease;}
+.setting-line input[type=checkbox]::before{content:"";width:18px;height:18px;border-radius:50%;position:absolute;top:2px;left:2px;background:white;box-shadow:0 1px 3px #0004;transition:transform .16s ease;}
+.setting-line input[type=checkbox]:checked{background:#137bce;border-color:#399dfd;}
+.setting-line input[type=checkbox]:checked::before{transform:translateX(18px)}
+.setting-line input[type=checkbox]:disabled{opacity:.45;cursor:not-allowed;}

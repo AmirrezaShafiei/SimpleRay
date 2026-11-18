@@ -1,9 +1,9 @@
 {
   "name": "simpleray",
-  "version": "0.3.0",
+  "version": "0.5.0-beta.1",
   "private": true,
   "type": "module",
-  "description": "Minimal Windows Xray client — Phases 3–4 Xray connection and real-delay ping",
+  "description": "Minimal Windows Xray client \u2014 Beta candidate phases 5 and 6",
   "scripts": {
     "dev": "node scripts/serve.mjs",
     "build": "node scripts/check.mjs",
@@ -12,5 +12,7 @@
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build"
   },
-  "devDependencies": {"@tauri-apps/cli": "^2.0.0"}
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
 }

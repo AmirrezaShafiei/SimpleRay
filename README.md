@@ -32,3 +32,12 @@ Read [PROJECT_STATUS.md](PROJECT_STATUS.md), [ROADMAP.md](ROADMAP.md), [SPEC.md]
 ## References
 Xray-core (MPL 2.0): https://github.com/XTLS/Xray-core  
 V2Fly (MIT): https://github.com/v2fly/v2ray-core
+
+## Desktop settings
+- Start with Windows (HKCU Run; installed exe only); launched minimized to tray.
+- Minimize to tray (default ON): X hides the window without stopping Xray.
+- Auto-connect on launch (default OFF): uses saved selected profile.
+- Theme: Dark/Light/System; Ping All: 3-average (default) or 1.
+- Exit in tray attempts to restore the previous Windows System Proxy before stopping.
+
+**Security:** subscription tokens and server secrets remain in local WebView storage without encryption; avoid this early beta on shared/untrusted Windows accounts.
