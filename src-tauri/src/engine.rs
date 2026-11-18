@@ -2,7 +2,7 @@
 //! The app does NOT claim success until an HTTPS 204 response travels through Xray.
 //! The external Xray binary must be installed locally or explicitly provided via
 //! SIMPLERAY_XRAY_PATH; no unverified binaries are downloaded or committed.
-use serde::{Deserialize,Serialize};
+use serde::Serialize;
 use serde_json::{json,Value};
 use std::{fs,net::TcpListener,path::PathBuf,time::{Duration,Instant}};
 use tauri::{AppHandle,Manager};
@@ -244,7 +244,7 @@ impl EngineManager {
                 Ok(None)=>{}
             }
             if active.last_poll.elapsed()>=Duration::from_millis(900){
-                let elapsed=active.last_poll.elapsed().as_secs_f64().max(.001);
+                let elapsed=active.last_poll.elapsed().as_secs_f64().max(0.001);
                 active.last_poll=Instant::now();
                 if let Some(api_port)=active.core.api_port{
                     match query_traffic(app,api_port).await{

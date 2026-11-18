@@ -70,7 +70,7 @@ fn set_autostart_enabled(enabled:bool)->Result<bool,String>{preferences::set_sta
 #[tauri::command]
 fn show_main_window(app:AppHandle)->Result<(),String>{
     let window=app.get_webview_window("main").ok_or("Main window unavailable")?;
-    window.show().map_err(|_|"Cannot show SimpleRay")
+    window.show().map_err(|_|"Cannot show SimpleRay".to_string())
 }
 #[cfg_attr(mobile,tauri::mobile_entry_point)]
 pub fn run(){

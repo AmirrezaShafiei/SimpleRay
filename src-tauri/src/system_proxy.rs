@@ -43,7 +43,7 @@ mod imp {
     }
     fn key()->Result<RegKey,String>{
         RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(INTERNET_SETTINGS,KEY_READ|KEY_QUERY_VALUE|KEY_SET_VALUE)
-            .map_err(|_|"Cannot access Windows Internet Settings")
+            .map_err(|_|"Cannot access Windows Internet Settings".to_string())
     }
     fn current_matches(k:&RegKey,port:u16)->bool{
         let enabled=k.get_value::<u32,_>("ProxyEnable").unwrap_or(0);
