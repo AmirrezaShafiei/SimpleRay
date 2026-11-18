@@ -1,0 +1,11 @@
+Xray-core is maintained by XTLS/Xray-core, an independent open-source project.
+Source: https://github.com/XTLS/Xray-core
+License: Mozilla Public License Version 2.0 (MPL-2.0)
+License text: https://www.mozilla.org/en-US/MPL/2.0/
+
+SimpleRay is not affiliated with or endorsed by the Xray-core authors.
+The official Xray-core executable is redistributed unmodified as a separate
+binary component. The full MPL-2.0 license, copyright notices, and source
+availability remain applicable to the Xray-core component.
+Build workflow must fetch the corresponding full upstream LICENSE from its
+pinned GitHub release/source before redistributing any bundled core.

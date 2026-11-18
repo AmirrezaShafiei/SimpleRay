@@ -1,0 +1,12 @@
+{
+  "log":{"loglevel":"warning"},
+  "inbounds":[
+    {"tag":"proxy-in","listen":"127.0.0.1","port":19989,"protocol":"http","settings":{"timeout":60}},
+    {"tag":"api-in","listen":"127.0.0.1","port":19990,"protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}
+  ],
+  "outbounds":[{"tag":"proxy","protocol":"freedom"}],
+  "api":{"tag":"api","services":["StatsService"]},
+  "routing":{"rules":[{"type":"field","inboundTag":["api-in"],"outboundTag":"api"}]},
+  "stats":{},
+  "policy":{"system":{"statsInboundUplink":true,"statsInboundDownlink":true}}
+}
