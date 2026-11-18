@@ -2,8 +2,12 @@ use std::time::Duration;
 use tauri::{AppHandle,Manager,State};
 use serde_json::Value;
 mod system_proxy;
+mod preferences;
+mod tray;
 mod engine;
 use engine::{EngineManager,ConnectionStatus,LatencyResult};
+use preferences::{DesktopPreferences,DesktopSettings};
+use tray::ExitGuard;
 const MAX_SUBSCRIPTION_BYTES:usize=2_000_000;
 
 #[tauri::command]
@@ -53,22 +57,46 @@ async fn connection_status(app:AppHandle,manager:State<'_,EngineManager>)->Resul
 async fn measure_server_latency(app:AppHandle,outbound:Value,samples:u8)->Result<LatencyResult,String>{
     engine::ping_server(&app,outbound,samples).await
 }
+#[tauri::command]
+fn get_desktop_settings(settings:State<'_,DesktopSettings>)->DesktopPreferences{settings.get()}
+#[tauri::command]
+fn set_desktop_settings(app:AppHandle,settings:State<'_,DesktopSettings>,preferences:DesktopPreferences)->Result<DesktopPreferences,String>{
+    settings.set(&app,preferences)
+}
+#[tauri::command]
+fn get_autostart_enabled()->Result<bool,String>{preferences::startup_enabled()}
+#[tauri::command]
+fn set_autostart_enabled(enabled:bool)->Result<bool,String>{preferences::set_startup_enabled(enabled)}
+#[tauri::command]
+fn show_main_window(app:AppHandle)->Result<(),String>{
+    let window=app.get_webview_window("main").ok_or("Main window unavailable")?;
+    window.show().map_err(|_|"Cannot show SimpleRay")
+}
 #[cfg_attr(mobile,tauri::mobile_entry_point)]
 pub fn run(){
     tauri::Builder::default()
         .manage(EngineManager::default())
+        .manage(ExitGuard::default())
         .setup(|app|{
             // If a previous session crashed while System Proxy was enabled, restore its prior settings.
             // An unrecoverable record blocks proxy takeover instead of overwriting unknown user settings.
             if let Err(e)=system_proxy::recover(&app.handle().clone()){
                 eprintln!("SimpleRay proxy recovery unavailable: {e}");
             }
+            app.manage(DesktopSettings::new(app.handle()));
+            tray::setup(app)?;
+            // Login startup must create the tray without flashing a main window.
+            if std::env::args().any(|arg|arg=="--minimized") {
+                if let Some(main)=app.get_webview_window("main") {let _=main.hide();}
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             read_clipboard_text,fetch_subscription_text,
-            connect_server,disconnect_server,connection_status,measure_server_latency
+            connect_server,disconnect_server,connection_status,measure_server_latency,
+            get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window
         ])
+        .on_window_event(tray::handle_window_event)
         .build(tauri::generate_context!())
         .expect("failed to initialize SimpleRay")
         .run(|app,event|{

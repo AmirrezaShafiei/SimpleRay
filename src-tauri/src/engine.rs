@@ -58,11 +58,16 @@ struct EngineRuntime {active:Option<Active>,last_error:Option<String>}
 #[derive(Default)]
 pub struct EngineManager {runtime:Mutex<EngineRuntime>}
 
-fn locate_xray()->Result<PathBuf,String>{
+fn locate_xray(app:&AppHandle)->Result<PathBuf,String>{
     if let Some(path)=std::env::var_os("SIMPLERAY_XRAY_PATH") {
         let p=PathBuf::from(path);
         if p.is_absolute()&&p.is_file(){return Ok(p)}
         return Err("SIMPLERAY_XRAY_PATH must point to an existing absolute Xray executable".into())
+    }
+    // Bundled resources are resolved via Tauri, not guessed relative to cwd.
+    if let Ok(resources)=app.path().resource_dir() {
+        let staged=resources.join("binaries").join("xray.exe");
+        if staged.is_file(){return Ok(staged)}
     }
     let current=std::env::current_exe().map_err(|_|"Cannot find application executable")?;
     let dir=current.parent().ok_or("Cannot locate executable directory")?;
@@ -92,11 +97,15 @@ fn validate_outbound(outbound:&Value)->Result<(),String>{
     Ok(())
 }
 fn xray_config(outbound:Value,proxy_port:u16,api_port:Option<u16>)->Value{
-    let inbounds=vec![json!({"tag":"proxy-in","listen":"127.0.0.1","port":proxy_port,"protocol":"http","settings":{"timeout":60}})];
+    let mut inbounds=vec![json!({"tag":"proxy-in","listen":"127.0.0.1","port":proxy_port,"protocol":"http","settings":{"timeout":60}})];
     let mut cfg=json!({"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[outbound]});
     if let Some(port)=api_port{
-        // Xray >=1.8.12 supports a local API listener without another routing rule.
-        cfg["api"]=json!({"tag":"api","listen":format!("127.0.0.1:{port}"),"services":["StatsService"]});
+        // Xray's gRPC API uses a loopback dokodemo-door inbound routed to
+        // the synthetic API outbound. The API object does NOT have a `listen` key.
+        inbounds.push(json!({"tag":"api-in","listen":"127.0.0.1","port":port,
+            "protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}));
+        cfg["api"]=json!({"tag":"api","services":["StatsService"]});
+        cfg["routing"]=json!({"rules":[{"type":"field","inboundTag":["api-in"],"outboundTag":"api"}]});
         cfg["stats"]=json!({});
         cfg["policy"]=json!({"system":{"statsInboundUplink":true,"statsInboundDownlink":true}});
     }
@@ -109,7 +118,7 @@ fn user_data_dir(app:&AppHandle)->Result<PathBuf,String>{
 }
 async fn start_xray(app:&AppHandle,outbound:Value,stats:bool)->Result<StartedXray,String>{
     validate_outbound(&outbound)?;
-    let bin=locate_xray()?;
+    let bin=locate_xray(app)?;
     let proxy_port=pick_port()?;
     let api_port=if stats{let mut p=pick_port()?;while p==proxy_port{p=pick_port()?}Some(p)}else{None};
     let dir=tempfile::Builder::new().prefix("simpleray-run-").tempdir_in(user_data_dir(app)?)
@@ -120,6 +129,10 @@ async fn start_xray(app:&AppHandle,outbound:Value,stats:bool)->Result<StartedXra
         .map_err(|_|"Could not save Xray runtime configuration")?;
     // Core checks generated config before any process is started.
     let mut check=Command::new(&bin);
+    // The official Xray ZIP includes geoip/geosite datasets alongside xray.exe.
+    // Point Xray at the bundled resource directory on Windows NSIS installs.
+    let assets=bin.parent().ok_or("Cannot locate Xray assets")?;
+    check.env("XRAY_LOCATION_ASSET",assets);
     check.args(["run","-test","-config"]).arg(&config_path)
         .kill_on_drop(true).stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
@@ -128,6 +141,7 @@ async fn start_xray(app:&AppHandle,outbound:Value,stats:bool)->Result<StartedXra
         .map_err(|_|"Unable to execute Xray-core")?;
     if !check.success(){return Err("Xray rejected this profile (protocol or transport configuration)".into())}
     let mut command=Command::new(&bin);
+    command.env("XRAY_LOCATION_ASSET",assets);
     command.args(["run","-config"]).arg(&config_path)
         .kill_on_drop(true).stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
@@ -233,7 +247,7 @@ impl EngineManager {
                 let elapsed=active.last_poll.elapsed().as_secs_f64().max(.001);
                 active.last_poll=Instant::now();
                 if let Some(api_port)=active.core.api_port{
-                    match query_traffic(api_port).await{
+                    match query_traffic(app,api_port).await{
                         Ok((up,down))=>{
                             active.upload_bps=up as f64/elapsed;
                             active.download_bps=down as f64/elapsed;
@@ -248,8 +262,8 @@ impl EngineManager {
     }
     pub async fn shutdown(&self,app:&AppHandle){let _=self.disconnect(app).await;}
 }
-async fn query_traffic(port:u16)->Result<(u64,u64),String>{
-    let xray=locate_xray()?;
+async fn query_traffic(app:&AppHandle,port:u16)->Result<(u64,u64),String>{
+    let xray=locate_xray(app)?;
     let mut command=Command::new(xray);
     command.arg("api").arg("statsquery")
         .arg(format!("--server=127.0.0.1:{port}"))
@@ -295,6 +309,9 @@ mod tests {
     #[test]fn configured_ports_are_local_only(){
         let value=xray_config(json!({"tag":"proxy","protocol":"trojan","settings":{}}),1234,Some(5678));
         assert_eq!(value["inbounds"][0]["listen"],"127.0.0.1");
-        assert_eq!(value["api"]["listen"],"127.0.0.1:5678");
+        assert_eq!(value["inbounds"][1]["listen"],"127.0.0.1");
+        assert_eq!(value["inbounds"][1]["port"],5678);
+        assert_eq!(value["routing"]["rules"][0]["outboundTag"],"api");
+        assert_eq!(value["api"]["tag"],"api");
     }
 }
