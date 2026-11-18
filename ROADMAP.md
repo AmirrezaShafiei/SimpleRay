@@ -22,6 +22,8 @@
 - Implement refresh of one / all subscriptions with last-good fallback, stable selection/favorites, safe deletion behavior.
 **Acceptance:** restart preserves entries, favorites, selection, subscription names; update adds/removes nodes correctly without erasing standalone configs; errors do not expose credentials.
 
+**Phase 2 checkpoint:** Implemented and committed in `77e7cea4621aec8808c37bf0f64ac4efc8feb12a`. Node tests 29/29 pass; native Windows build and live subscription fetch not yet verified. Phase 3 must not start without user request.
+
 ## Phase 3 — Live Xray connection and traffic
 - Integrate packaged Xray-core; generate/check valid runtime config for supported options and protocols.
 - Implement real connect/disconnect with the **same compact toggle**, state machine (disconnected / connecting / connected / failed / reconnecting).
