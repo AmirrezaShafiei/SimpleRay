@@ -1,43 +1,36 @@
-# SimpleRay
+# SimpleRay — minimal Windows Xray client
 
-Minimal, single-window Windows desktop proxy client built on Tauri and Xray-core.
+Single-window, no-sidebar V2Ray/Xray client with Dark/Light/System themes, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
 
-> **Status:** Phase 1/2 interface and configuration logic, Phase 3/4 Xray integration and HTTP real-delay source are implemented. **No verified native Windows build or installer yet. Do not treat the existing source as an installed production client.**
+> **Status:** Version `0.5.0-beta.1` **source candidate** for Phases 1–6. **51/51 local Node tests passed.** Native Windows integration, real-server connections and installer are only verified after GitHub Actions/Windows tests succeed. Do not assume a completed installer from this README alone.
 
-## Features implemented in source
-- Single-window Dark/Light themes; no sidebar
-- Clipboard import, named subscriptions and refresh, Source column, favorites, search, sort, editing/duplication/removal
-- One balanced connection switch for on/off and double-click server switching
-- Xray-core subprocess validation + real proxied 204 preflight before WinINet System Proxy takeover; clean disconnect and recovery logic
-- Measured traffic upload/download bytes/s via Xray StatsService (not sample data)
-- Main Ping button next to Update, default 3 real-delay HTTPS samples/average or 1 sample in Settings, per-node right-click ×1/×3, text-only latency colors
+## Features in source
+- Clipboard import of VMess, VLESS, Trojan, Shadowsocks, plus manually named subscriptions and update/rename/delete.
+- Table Source column is subscription name or `—`; numeric colored latency text without boxed badges; sort by clicking any header.
+- Context-menu single-node Ping x1/x3; toolbar Ping All next to Update, default 3 HTTP-through-proxy tests averaged (Settings may select 1).
+- One switch for real connect/disconnect using official Xray-core; live traffic arrows appear only when connected; System Proxy on Windows.
+- System Tray Show / Connect-Disconnect / Exit; closing window hides to tray by default; explicit Exit attempts System Proxy restoration before exit.
+- Start with Windows under HKCU user registry; separate Auto-connect option (OFF by default).
+- Consistent Dark/Light/System themes and a small gear Settings panel.
 
-## Local Windows setup (development, requires validation)
-1. Install Windows Rust toolchain, MSVC Build Tools, Node.js, and Tauri prerequisites/WebView2.
-2. Download the Xray-core Windows release from the official https://github.com/XTLS/Xray-core/releases and independently verify its SHA256.
-3. Stage the verified archive with `powershell -ExecutionPolicy Bypass -File scripts/stage-xray.ps1 -Archive C:\\Downloads\\Xray-windows-64.zip -Sha256 <your-verified-hash>`; `xray.exe` is intentionally gitignored.
-4. Run `npm install`, then `npm run desktop:dev` from the repository root.
-5. Run `npm test` (43 JS/static tests) and `npm run build` (syntax/source checker only). `npm run desktop:build` is a native build and requires a working Windows toolchain and a properly bundled Xray binary before distributing.
+## Test source locally
+- `npm install` — fetch Tauri CLI build dependencies
+- `npm test` — Node unit/static tests (51/51 in current runner).
+- `npm run build` — checks source/JS syntax **ONLY**, not native code.
+- `npm run dev` — browser UI preview **without native connections**.
+- `npm run desktop:dev` — requires Windows, Rust/Cargo, MSVC, WebView2, verified official Xray binary staged in `src-tauri/binaries/`.
+- `npm run desktop:build` — Windows NSIS installer (requires those native build dependencies and staged core assets).
 
-## Limitations
-- Windows System Proxy is WinINet HTTP/HTTPS only, not transparent TUN.
-- LocalStorage currently holds plaintext profile secrets from Phase 2; encrypted storage is not yet implemented.
-- Not every Xray share-link option is supported. Unknown options may be rejected to avoid false connectivity.
-- Live Windows Tauri/Xray process and registry integration cannot be claimed tested in the current build environment.
-- Tray, Windows startup, final settings and packaging are reserved for Phases 5 and 6.
+For manual Xray staging, use `scripts/stage-xray.ps1` with a separately trusted 64-character SHA256. CI pins official Xray-core v26.11.9.
 
-## Handoff
-Read [PROJECT_STATUS.md](PROJECT_STATUS.md), [ROADMAP.md](ROADMAP.md), [SPEC.md](SPEC.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PHASE3_REPORT.md](PHASE3_REPORT.md), and [PHASE4_REPORT.md](PHASE4_REPORT.md). Continue only when the user explicitly requests another phase.
+## Windows beta pipeline
+- [.github/workflows/windows-beta.yml](.github/workflows/windows-beta.yml) builds on Windows 2022 and verifies official Xray ZIP SHA256, Xray API fixture, Node/Rust tests, NSIS package, and then uploads the installer; only successful CI publishes an **unsigned** GitHub prerelease.
+- [GitHub Actions run](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44382246461) and [Releases](https://github.com/AmirrezaShafiei/SimpleRay/releases) are the sources of truth about installer availability.
 
-## References
-Xray-core (MPL 2.0): https://github.com/XTLS/Xray-core  
-V2Fly (MIT): https://github.com/v2fly/v2ray-core
+## Security and limits
+**Sensitive share URIs and subscription URLs are currently stored as plaintext local WebView data. Use only on a trusted Windows user profile. Encrypted OS-backed storage is required before wide public distribution.** This beta has no TUN, split tunnel or browser extension. The NSIS installer is not digitally signed.
 
-## Desktop settings
-- Start with Windows (HKCU Run; installed exe only); launched minimized to tray.
-- Minimize to tray (default ON): X hides the window without stopping Xray.
-- Auto-connect on launch (default OFF): uses saved selected profile.
-- Theme: Dark/Light/System; Ping All: 3-average (default) or 1.
-- Exit in tray attempts to restore the previous Windows System Proxy before stopping.
+## Project handoff
+Read [PROJECT_STATUS.md](PROJECT_STATUS.md), [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), then [PHASE5_REPORT.md](PHASE5_REPORT.md) and [PHASE6_REPORT.md](PHASE6_REPORT.md). Screenshot: [design/reference.jpg](design/reference.jpg).
 
-**Security:** subscription tokens and server secrets remain in local WebView storage without encryption; avoid this early beta on shared/untrusted Windows accounts.
+Core reference: [XTLS/Xray-core](https://github.com/XTLS/Xray-core) (MPL-2.0). V2Fly/V2Ray (MIT) consulted as conceptual reference, not directly copied.
