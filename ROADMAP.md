@@ -89,3 +89,9 @@ TUN, split tunneling, elaborate rules editor, browser extension, a left sidebar,
 - [x] Change Ping All default to 2, preserve 1/2/3 options and per-server x2 action.
 - [ ] Verify Windows GitHub Actions build and UI behavior on an actual Windows desktop before considering release final.
 - [ ] Manual acceptance: observe a real Suggest candidate with app hidden, dismiss via focus loss, switch through quick popup, and verify no repeated interruptions.
+
+### beta.5 build gate — verified 2026-11-19
+- [x] Merge [PR #3](https://github.com/AmirrezaShafiei/SimpleRay/pull/3) into main.
+- [x] GitHub Actions Windows build [run 44448631002](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44448631002) successful, including JS/Rust, system proxy, NSIS installation and startup checks.
+- [x] Unsigned [v0.5.0-beta.5](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.5) published.
+- [ ] User-side hands-on verification of popup positioning/focus, Suggest decision accept, live connection and theme rendering. This remains an open QA gate.
