@@ -8,7 +8,7 @@ use crate::{engine::EngineManager,preferences::DesktopSettings,switching::TraySu
 pub struct ExitGuard(pub AtomicBool);
 
 const PANEL_WINDOW: &str = "tray-panel";
-const PANEL_SIZE: (f64, f64) = (356.0, 388.0);
+const PANEL_SIZE: (f64, f64) = (356.0, 370.0);
 
 const SUGGESTION_WINDOW:&str="tray-suggestion";
 const SUGGESTION_SIZE:(f64,f64)=(358.0,146.0);
@@ -92,19 +92,20 @@ fn open_panel(app: &AppHandle, point: PhysicalPosition<f64>) -> tauri::Result<()
     }
     if let Some(notice)=app.get_webview_window(SUGGESTION_WINDOW) { let _=notice.hide(); }
     panel.show()?;
-    panel.set_focus()?;
+    let _=panel.set_focus();
     let _=send_to_main(app,"simpleray:tray-panel-visible",&serde_json::json!(true));
     Ok(())
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum PanelAction { Refresh, Connect, Disconnect, Retry, Switch, Exit, Close }
+pub enum PanelAction { Refresh, Connect, Disconnect, RestoreProxy, Retry, Switch, Open, Exit, Close }
 
 pub fn panel_action(app:&AppHandle,window:&WebviewWindow,action:PanelAction,server_id:Option<String>)->Result<(),String>{
     if window.label()!=PANEL_WINDOW {return Err("Unknown tray panel".into());}
     if !window.is_visible().unwrap_or(false) {return Ok(());}
     match action {
+        PanelAction::Open=>{show_main(app);Ok(())}
         PanelAction::Exit=>{hide_panel(app);request_exit(app.clone());Ok(())}
         PanelAction::Close=>{hide_panel(app);Ok(())}
         PanelAction::Refresh=>send_to_main(app,"simpleray:tray-panel-visible",&serde_json::json!(true)),
@@ -112,6 +113,7 @@ pub fn panel_action(app:&AppHandle,window:&WebviewWindow,action:PanelAction,serv
             let command=match action{
                 PanelAction::Connect=>"connect",
                 PanelAction::Disconnect=>"disconnect",
+                PanelAction::RestoreProxy=>"restoreProxy",
                 PanelAction::Retry=>"retry",
                 PanelAction::Switch=>"switch",
                 _=>unreachable!(),

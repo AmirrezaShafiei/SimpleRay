@@ -207,6 +207,9 @@ pub fn run(){
             app.manage(DesktopSettings::new(app.handle()));
             app.manage(diagnostics::Diagnostics::new(app.handle()));
             tray::setup(app)?;
+            if let Err(error)=preferences::initialize_startup(){
+                eprintln!("Could not initialize Start with Windows: {error}");
+            }
             network_events::start(app.handle());
             let handle=app.handle().clone();
             tauri::async_runtime::spawn(async move {

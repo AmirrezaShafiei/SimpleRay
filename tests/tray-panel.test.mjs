@@ -23,6 +23,8 @@ test('the combined status card connects, disconnects or retries the correct serv
   assert.equal(trayConnectionAction({connected:true,activeId:'B'}).action,'disconnect');
   assert.deepEqual(trayConnectionAction({connected:true,activeId:'B',retry:true}),{action:'retry',serverId:'B',label:'Retry',primary:true});
   assert.equal(outageLabel(3610),'1h 0m');
+  assert.deepEqual(trayConnectionAction({connected:true,activeId:'B',proxyInactive:true}),
+    {action:'restoreProxy',serverId:null,label:'Restore proxy',primary:true});
 });
 
 test('the tray has four visible rows, scrolls for more, and animates overflowing names on demand',()=>{
@@ -35,5 +37,9 @@ test('the tray has four visible rows, scrolls for more, and animates overflowing
   assert.match(js,/scrollWidth-wrapper\.clientWidth/);
   assert.match(js,/pointerenter/);
   assert.match(js,/pointerleave/);
-  assert.match(html,/<footer[^>]*>\s*<button id="trayExit"[\s\S]*?<\/button>\s*<\/footer>/);
+  const footer=html.match(/<footer[^>]*>([\s\S]*?)<\/footer>/)[1];
+  assert.deepEqual([...footer.matchAll(/<button id="([^"]+)"/g)].map(match=>match[1]),['trayOpen','trayExit']);
+  assert.match(css,/grid-template-rows: auto auto auto auto auto/);
+  assert.match(js,/keyboardServerId\?\?results\[0\]\.id/);
+  assert.match(js,/event\.isComposing/);
 });

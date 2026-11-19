@@ -269,6 +269,7 @@ function syncTrayPanel(force=false){
     activeId:hasSession?activeId:null,
     connectionMode:hasSession?current.connectionMode:trayPanel.mode,
     connected:current.state==='connected',
+    proxyInactive:current.state==='connected'&&current.connectionMode==='systemProxy'&&!current.systemProxy,
     retry:hasSession&&((current.health?.consecutiveFailures??0)>=2||current.outageSeconds!=null),
     busy:state.connectionBusy||current.health?.switching&&'Switching…'||'',
     latencyMs:current.health?.latencyMs??current.lastGoodPingMs??current.initialLatencyMs,
@@ -294,6 +295,7 @@ async function handleTrayAction({action,serverId}){
   if(state.connectionBusy||state.connection.health?.switching)return;
   trayPanel.error='';
   if(action==='disconnect'){await disconnectConnection();return}
+  if(action==='restoreProxy'){await restoreSystemProxy();return}
   if(action==='switch'){
     if(state.connection.health?.suggestion?.serverId!==serverId){
       connectionError('The suggested server changed. Choose a server from the updated list.');
@@ -379,7 +381,7 @@ async function restoreSystemProxy(){
   try{
     state.connection=await nativeInvoke('restore_system_proxy');
     toast('Windows System Proxy restored');
-  }catch(error){toast(errorMessage(error))}
+  }catch(error){connectionError(error)}
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
 async function testActiveConnection(){

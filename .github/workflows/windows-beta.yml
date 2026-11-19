@@ -2,7 +2,7 @@ name: SimpleRay Windows beta (candidate)
 
 on:
   push:
-    branches: [main, build/simpleray-beta9]
+    branches: [main, build/simpleray-beta10]
     paths:
       - 'frontend/**'
       - 'src-tauri/**'
@@ -99,7 +99,19 @@ jobs:
           & (Join-Path $installDir 'binaries/xray.exe') run -test -config 'tests/fixtures/xray-api.json'
           if ($LASTEXITCODE -ne 0) { throw 'Installed Xray failed validation' }
           $exe = Join-Path $installDir 'simpleray.exe'
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $prefKey = 'HKCU:\Software\SimpleRay'
+          $startupValue = Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue
+          $preferenceValue = Get-ItemPropertyValue $prefKey -Name StartWithWindows -ErrorAction SilentlyContinue
+          Remove-ItemProperty $runKey -Name SimpleRay -ErrorAction SilentlyContinue
+          Remove-ItemProperty $prefKey -Name StartWithWindows -ErrorAction SilentlyContinue
+          $debugListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+          $debugListener.Start()
+          $debugPort = $debugListener.LocalEndpoint.Port
+          $debugListener.Stop()
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$debugPort"
           $first = Start-Process -FilePath $exe -PassThru
+          Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
           try {
             for ($i=0; $i -lt 20; $i++) {
               Start-Sleep -Seconds 1
@@ -108,6 +120,11 @@ jobs:
               if ($first.MainWindowHandle -ne 0) { break }
             }
             if ($first.MainWindowHandle -eq 0) { throw 'Installed app did not open a window' }
+            $expectedStartup = '"' + $exe + '" --minimized'
+            $actualStartup = Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue
+            if ($actualStartup -ne $expectedStartup) { throw "Start with Windows was not registered by default: $actualStartup" }
+            node scripts/tray-webview-smoke.mjs $debugPort
+            if ($LASTEXITCODE -ne 0) { throw 'Installed tray WebView checks failed' }
             $second = Start-Process -FilePath $exe -PassThru
             try {
               if (!$second.WaitForExit(10000)) { throw 'Second instance did not exit' }
@@ -117,9 +134,38 @@ jobs:
             }
           } finally {
             if (!$first.HasExited) { Stop-Process -Id $first.Id -Force }
+            $first.WaitForExit()
+          }
+          try {
+            New-Item -Path $prefKey -Force | Out-Null
+            New-ItemProperty -Path $prefKey -Name StartWithWindows -Value 0 -PropertyType DWord -Force | Out-Null
+            $disabled = Start-Process -FilePath $exe -PassThru
+            try {
+              for ($i=0; $i -lt 20 -and $disabled.MainWindowHandle -eq 0; $i++) {
+                Start-Sleep -Seconds 1
+                $disabled.Refresh()
+                if ($disabled.HasExited) { throw 'App exited during startup opt-out check' }
+              }
+              if ($disabled.MainWindowHandle -eq 0) { throw 'App did not open to check startup opt-out' }
+              if (Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue) { throw 'App did not honor the startup opt-out' }
+            } finally {
+              if (!$disabled.HasExited) { Stop-Process -Id $disabled.Id -Force }
+              $disabled.WaitForExit()
+            }
+            New-ItemProperty -Path $runKey -Name SimpleRay -Value $expectedStartup -PropertyType String -Force | Out-Null
+            $uninstall = Start-Process -FilePath (Join-Path $installDir 'uninstall.exe') -ArgumentList '/S' -PassThru -Wait
+            if ($uninstall.ExitCode -ne 0) { throw "NSIS uninstall failed: $($uninstall.ExitCode)" }
+            if (Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue) { throw 'The uninstaller left its startup entry behind' }
+          } finally {
+            if ($null -ne $startupValue) {
+              New-ItemProperty -Path $runKey -Name SimpleRay -Value $startupValue -PropertyType String -Force | Out-Null
+            } else { Remove-ItemProperty $runKey -Name SimpleRay -ErrorAction SilentlyContinue }
+            if ($null -ne $preferenceValue) {
+              New-ItemProperty -Path $prefKey -Name StartWithWindows -Value $preferenceValue -PropertyType DWord -Force | Out-Null
+            } else { Remove-ItemProperty $prefKey -Name StartWithWindows -ErrorAction SilentlyContinue }
           }
       - name: Deliver the tested installer as a private draft
-        if: github.ref == 'refs/heads/build/simpleray-beta9'
+        if: github.ref == 'refs/heads/build/simpleray-beta10'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,7 +177,7 @@ jobs:
           $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksumFile = Join-Path $installer.DirectoryName 'SHA256SUMS.txt'
           "$checksum  $($installer.Name)" | Set-Content -Path $checksumFile -Encoding ascii
-          gh release create $version $installer.FullName $checksumFile --draft --prerelease --target $env:GITHUB_SHA --title "SimpleRay $version (Windows x64)" --notes "Built from beta.8 with the themed tray panel. JavaScript and Rust tests, System Proxy round-trip, Xray/Wintun startup, NSIS installation and the single-instance smoke test passed."
+          gh release create $version $installer.FullName $checksumFile --draft --prerelease --target $env:GITHUB_SHA --title "SimpleRay $version (Windows x64)" --notes "Built from beta.9 with the compact tray, Open SimpleRAY and Start with Windows enabled by default. JavaScript and Rust tests, System Proxy round-trip, Xray/Wintun startup, NSIS installation and uninstall, the startup default and opt-out, and the single-instance smoke test passed."
           if ($LASTEXITCODE -ne 0) { throw 'Could not attach the installer to the draft' }
           Write-Host "$checksum  $($installer.Name)"
       - name: Publish beta pre-release after successful build and tests

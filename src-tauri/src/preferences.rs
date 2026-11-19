@@ -49,49 +49,76 @@ mod windows_startup {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     const REG_PATH:&str=r"Software\Microsoft\Windows\CurrentVersion\Run";
     const VALUE:&str="SimpleRay";
+    const PREFERENCES_KEY:&str=r"Software\SimpleRay";
+    const STARTUP_PREFERENCE:&str="StartWithWindows";
+
     fn run_key()->Result<RegKey,String>{
-        RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(
-            REG_PATH,winreg::enums::KEY_READ|winreg::enums::KEY_QUERY_VALUE|winreg::enums::KEY_SET_VALUE
-        ).map_err(|_|"Cannot access user startup settings".into())
+        RegKey::predef(HKEY_CURRENT_USER).create_subkey(REG_PATH).map(|(key,_)|key)
+            .map_err(|_|"Cannot access user startup settings".into())
+    }
+    fn preference_key()->Result<RegKey,String>{
+        RegKey::predef(HKEY_CURRENT_USER).create_subkey(PREFERENCES_KEY).map(|(key,_)|key)
+            .map_err(|_|"Cannot access SimpleRay startup preferences".into())
     }
     fn startup_command()->Result<String,String>{
-        let path=std::env::current_exe().map_err(|_|"Cannot find app executable")?;
-        // Do not register a debug executable or a spoofed location as the login app.
+        let path=std::env::current_exe().map_err(|_|"Cannot find application executable")?;
         let name=path.file_name().and_then(|n|n.to_str()).unwrap_or("");
         if !name.eq_ignore_ascii_case("simpleray.exe") {
             return Err("Startup is only available from the installed SimpleRay.exe".into())
         }
         Ok(format!("\"{}\" --minimized",path.display()))
     }
+    fn read_entry(key:&RegKey)->Result<Option<String>,String>{
+        match key.get_value(VALUE){
+            Ok(value)=>Ok(Some(value)),
+            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+            Err(_)=>Err("Cannot read the SimpleRay startup entry".into()),
+        }
+    }
+    fn sync_entry(key:&RegKey,entry:&str,current:Option<&str>,enabled:bool)->Result<(),String>{
+        if enabled && current.is_none(){
+            key.set_value(VALUE,&entry).map_err(|_|"Failed to enable Start with Windows")?;
+        }else if !enabled && current==Some(entry){
+            key.delete_value(VALUE).map_err(|_|"Failed to disable Start with Windows")?;
+        }
+        Ok(())
+    }
+    pub fn initialize()->Result<(),String>{
+        let entry=startup_command()?;
+        let prefs=preference_key()?;
+        let enabled=match prefs.get_value::<u32,_>(STARTUP_PREFERENCE){
+            Ok(value)=>value!=0,
+            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>true,
+            Err(_)=>return Err("Cannot read the Start with Windows preference".into()),
+        };
+        let key=run_key()?;
+        let current=read_entry(&key)?;
+        sync_entry(&key,&entry,current.as_deref(),enabled)
+    }
     pub fn is_enabled()->Result<bool,String>{
-        let k=run_key()?;
-        let existing: String=match k.get_value(VALUE){Ok(v)=>v,Err(_)=>return Ok(false)};
-        Ok(startup_command().is_ok_and(|expected|existing==expected))
+        let key=run_key()?;
+        Ok(read_entry(&key)?.is_some_and(|current|startup_command().is_ok_and(|entry|current==entry)))
     }
     pub fn set_enabled(enabled:bool)->Result<bool,String>{
-        let k=run_key()?;
-        if enabled {
-            let entry=startup_command()?;
-            if let Ok(current)=k.get_value::<String,_>(VALUE) {
-                if current!=entry {return Err("Another SimpleRay startup entry already exists; not overwriting it".into());}
-            }
-            k.set_value(VALUE,&entry).map_err(|_|"Failed to enable Start with Windows")?;
-        }else {
-            if let Ok(current)=k.get_value::<String,_>(VALUE) {
-                let ours=startup_command()?;
-                if current!=ours {return Err("Startup entry was modified externally; refusing to delete it".into());}
-                k.delete_value(VALUE).map_err(|_|"Failed to disable Start with Windows")?;
-            }
+        let entry=startup_command()?;
+        let key=run_key()?;
+        let current=read_entry(&key)?;
+        if current.as_deref().is_some_and(|value|value!=entry.as_str()){
+            return Err("Another SimpleRay startup entry already exists; not overwriting it".into());
         }
-        is_enabled()
+        preference_key()?.set_value(STARTUP_PREFERENCE,&u32::from(enabled))
+            .map_err(|_|"Cannot save the Start with Windows preference")?;
+        sync_entry(&key,&entry,current.as_deref(),enabled)?;
+        Ok(enabled)
     }
 }
 #[cfg(not(target_os="windows"))]
 mod windows_startup {
+    pub fn initialize()->Result<(),String>{Ok(())}
     pub fn is_enabled()->Result<bool,String>{Ok(false)}
     pub fn set_enabled(_enabled:bool)->Result<bool,String>{Err("Start with Windows is available only on Windows".into())}
 }
-pub use windows_startup::{is_enabled as startup_enabled,set_enabled as set_startup_enabled};
+pub use windows_startup::{initialize as initialize_startup,is_enabled as startup_enabled,set_enabled as set_startup_enabled};
 
 #[cfg(test)]
 mod tests {

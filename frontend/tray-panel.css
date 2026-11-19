@@ -8,9 +8,10 @@
 .tray-panel {
   height: 100%;
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
-  gap: 9px;
-  padding: 12px;
+  grid-template-rows: auto auto auto auto auto;
+  align-content: start;
+  gap: 7px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
@@ -59,6 +60,7 @@
 }
 .tray-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .tray-connection[data-state="healthy"] .tray-dot { background: var(--green); }
+.tray-connection[data-state="proxy-inactive"] .tray-dot,
 .tray-connection[data-state="unhealthy"] .tray-dot { background: var(--red); }
 .tray-flag { width: 20px; height: 15px; display: grid; place-items: center; }
 .tray-flag .ui-icon { width: 15px; height: 15px; color: var(--muted); }
@@ -223,7 +225,7 @@
 .tray-footer {
   min-height: 28px;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: end;
   border-top: 1px solid var(--border);
 }

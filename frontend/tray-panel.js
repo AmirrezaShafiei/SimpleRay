@@ -19,8 +19,8 @@ let snapshot={};
 let catalog=[];
 let group='all';
 let results=[];
-let keyboardIndex=-1;
-let windowKey='';
+let keyboardServerId=null;
+const visibleRows=new Map();
 let paintPending=false;
 let lastListState='';
 
@@ -41,7 +41,8 @@ function showError(message){
 }
 
 async function action(kind,serverId=null){
-  if(snapshot.busy&&kind!=='exit'&&kind!=='close'&&kind!=='refresh')return;
+  const connectionAction=['connect','disconnect','retry','switch','restoreProxy'].includes(kind);
+  if(snapshot.busy&&connectionAction)return;
   if(kind!=='refresh')showError('');
   try{await invoke('tray_panel_action',{action:kind,serverId})}
   catch(error){if(kind!=='refresh')showError(String(error?.message??error))}
@@ -74,8 +75,8 @@ function renderStatus(){
   }
   renderFlag($('trayActiveFlag'),server,globe);
   $('trayMode').textContent=snapshot.connectionMode==='tun'?'TUN':'System Proxy';
-  $('trayConnection').dataset.state=snapshot.retry?'unhealthy':snapshot.connected?'healthy':'idle';
-  const state=snapshot.busy|| (snapshot.retry?'Not responding':snapshot.connected?'Connected':'Disconnected');
+  $('trayConnection').dataset.state=snapshot.proxyInactive?'proxy-inactive':snapshot.retry?'unhealthy':snapshot.connected?'healthy':'idle';
+  const state=snapshot.busy||(snapshot.proxyInactive?'Proxy inactive':snapshot.retry?'Not responding':snapshot.connected?'Connected':'Disconnected');
   const latency=snapshot.activeId?snapshot.latencyMs:server?.latency;
   const detail=[state,Number.isFinite(latency)?`${latency} ms`:null,
     snapshot.outageSeconds!=null?`${outageLabel(snapshot.outageSeconds)} outage`:null].filter(Boolean).join(' · ');
@@ -83,73 +84,96 @@ function renderStatus(){
   $('trayState').title=detail;
   const command=trayConnectionAction(snapshot);
   $('trayConnect').textContent=snapshot.busy?'Working…':command.label;
-  $('trayConnect').disabled=Boolean(snapshot.busy||(command.action!=='disconnect'&&!command.serverId));
+  $('trayConnect').disabled=Boolean(snapshot.busy||(command.action==='connect'&&!command.serverId));
   $('trayConnect').dataset.primary=String(command.primary);
   $('trayConnect').onclick=()=>void action(command.action,command.serverId);
   showError(snapshot.error??'');
 }
 
-function selectServer(index){
-  const server=results[index];
-  if(!server)return;
-  const suggested=server.id===snapshot.suggestion?.serverId;
-  if(server.id===snapshot.activeId){
-    if(snapshot.retry)void action('retry',server.id);
+function selectServer(serverId){
+  if(serverId==null)return;
+  if(serverId===snapshot.activeId){
+    if(snapshot.proxyInactive)void action('restoreProxy');
+    else if(snapshot.retry)void action('retry',serverId);
     return;
   }
-  void action(suggested?'switch':'connect',server.id);
+  void action(serverId===snapshot.suggestion?.serverId?'switch':'connect',serverId);
 }
 
-function makeRow(server,index){
-  const proposed=server.id===snapshot.suggestion?.serverId;
-  const active=server.id===snapshot.activeId;
+function makeRow(serverId){
   const button=component('button','tray-row');
   button.type='button';
+  const flag=component('span','tray-flag');
+  const copy=component('span','tray-server-copy');
+  const frame=component('span','tray-name');
+  const value=component('span','');
+  value.dir='auto';
+  const suggestion=component('span','tray-suggest-label','Suggested');
+  const latency=component('span','tray-latency');
+  const indicator=component('span','');
+  frame.append(value);
+  copy.append(frame,suggestion);
+  button.append(flag,copy,latency,indicator);
+  installMarquee(frame,button);
+  button.addEventListener('click',()=>selectServer(serverId));
+  return {button,flag,frame,value,suggestion,latency,indicator};
+}
+
+function updateRow(row,server,index){
+  const {button,flag,frame,value,suggestion,latency,indicator}=row;
+  const proposed=server.id===snapshot.suggestion?.serverId;
+  const active=server.id===snapshot.activeId;
   button.disabled=Boolean(snapshot.busy);
   button.style.top=`${index*rowHeight}px`;
   button.classList.toggle('suggested',proposed);
-  button.classList.toggle('keyboard-selected',index===keyboardIndex);
+  button.classList.toggle('keyboard-selected',server.id===keyboardServerId);
   const name=displayServerName(server);
+  if(value.textContent!==name){
+    frame.classList.remove('marquee-running');
+    frame.removeAttribute('title');
+    value.textContent=name;
+  }
   button.setAttribute('aria-label',proposed?`Switch to ${name}, suggested server`:active?`${name}, current server`:`Connect to ${name}`);
   if(active)button.setAttribute('aria-current','true');
-  const flag=component('span','tray-flag');
+  else button.removeAttribute('aria-current');
   renderFlag(flag,server,globe);
-  const copy=component('span','tray-server-copy');
-  const frame=component('span','tray-name');
-  const value=component('span','',name);
-  value.dir='auto';
-  frame.append(value);
-  copy.append(frame);
-  if(proposed)copy.append(component('span','tray-suggest-label','Suggested'));
-  const latency=proposed?snapshot.suggestion.candidateMs:active?snapshot.latencyMs??server.latency:server.latency;
-  button.append(flag,copy,component('span',`tray-latency ${latencyClass(latency)}`,Number.isFinite(latency)?`${latency} ms`:'—'));
-  if(proposed)button.append(component('span','tray-switch-label','Switch'));
-  else if(active)button.append(component('span','tray-active-check','✓'));
-  installMarquee(frame,button);
-  button.addEventListener('click',()=>selectServer(index));
-  return button;
+  suggestion.hidden=!proposed;
+  const ms=proposed?snapshot.suggestion.candidateMs:active?snapshot.latencyMs??server.latency:server.latency;
+  latency.className=`tray-latency ${latencyClass(ms)}`;
+  latency.textContent=Number.isFinite(ms)?`${ms} ms`:'—';
+  indicator.className=proposed?'tray-switch-label':active?'tray-active-check':'';
+  indicator.hidden=!proposed&&!active;
+  indicator.textContent=proposed?'Switch':active?'✓':'';
 }
 
 function drawRows(){
   const start=Math.max(0,Math.floor(list.scrollTop/rowHeight)-2);
-  const end=Math.min(results.length,start+10);
-  const key=`${start}:${end}:${keyboardIndex}:${lastListState}`;
-  if(key===windowKey)return;
-  windowKey=key;
-  rows.replaceChildren(...results.slice(start,end).map((server,index)=>makeRow(server,start+index)));
+  const windowed=results.slice(start,start+10);
+  const wanted=new Set(windowed.map(server=>server.id));
+  for(const [id,row] of visibleRows){
+    if(wanted.has(id))continue;
+    row.button.remove();
+    visibleRows.delete(id);
+  }
+  for(const [offset,server] of windowed.entries()){
+    const row=visibleRows.get(server.id)??makeRow(server.id);
+    visibleRows.set(server.id,row);
+    updateRow(row,server,start+offset);
+    const position=rows.children[offset];
+    if(position!==row.button)rows.insertBefore(row.button,position??null);
+  }
 }
 
 function updateList(resetScroll=false){
   results=trayServers(catalog,{group,query:search.value,suggestion:snapshot.suggestion});
-  if(resetScroll){list.scrollTop=0;keyboardIndex=-1;}
-  if(keyboardIndex>=results.length)keyboardIndex=-1;
+  if(resetScroll){list.scrollTop=0;keyboardServerId=null;}
+  if(!results.some(server=>server.id===keyboardServerId))keyboardServerId=null;
   $('trayEmpty').hidden=results.length>0;
   rows.style.height=`${results.length*rowHeight}px`;
-  windowKey='';
   drawRows();
 }
 
-function readCatalog(){
+function readCatalog(resetScroll=false){
   const repository=createRepository(localStorage);
   catalog=repository.rows();
   const filters=[
@@ -172,13 +196,14 @@ function readCatalog(){
     return button;
   }));
   renderStatus();
-  updateList();
+  updateList(resetScroll);
 }
 
 function refresh(){
   appearance=restoreAppearance(savedPreferences(localStorage));
   theme();
-  readCatalog();
+  groups.open=false;
+  readCatalog(true);
   void action('refresh');
 }
 
@@ -197,16 +222,18 @@ systemLight.addEventListener('change',theme);
 window.addEventListener('focus',refresh);
 search.addEventListener('input',()=>updateList(true));
 search.addEventListener('keydown',event=>{
-  if(!results.length)return;
+  if(event.isComposing||event.keyCode===229||!results.length)return;
   if(event.key==='Enter'){
     event.preventDefault();
-    selectServer(Math.max(0,keyboardIndex));
+    selectServer(keyboardServerId??results[0].id);
     return;
   }
   if(event.key!=='ArrowDown'&&event.key!=='ArrowUp')return;
   event.preventDefault();
-  keyboardIndex=Math.min(results.length-1,Math.max(0,keyboardIndex+(event.key==='ArrowDown'?1:-1)));
-  const top=keyboardIndex*rowHeight;
+  const previous=results.findIndex(server=>server.id===keyboardServerId);
+  const index=Math.min(results.length-1,Math.max(0,previous+(event.key==='ArrowDown'?1:-1)));
+  keyboardServerId=results[index].id;
+  const top=index*rowHeight;
   if(top<list.scrollTop)list.scrollTop=top;
   else if(top+rowHeight>list.scrollTop+list.clientHeight)list.scrollTop=top+rowHeight-list.clientHeight;
   drawRows();
@@ -218,10 +245,11 @@ list.addEventListener('scroll',()=>{
 });
 document.addEventListener('click',event=>{if(!groups.contains(event.target))groups.open=false;});
 document.addEventListener('keydown',event=>{
-  if(event.key!=='Escape')return;
+  if(event.isComposing||event.key!=='Escape')return;
   if(groups.open){groups.open=false;$('trayGroupLabel').focus()}
   else void action('close');
 });
+$('trayOpen').addEventListener('click',()=>void action('open'));
 $('trayExit').addEventListener('click',()=>void action('exit'));
 installMarquee($('trayActiveName'));
 refresh();
