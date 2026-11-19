@@ -99,12 +99,13 @@ jobs:
           & (Join-Path $installDir 'binaries/xray.exe') run -test -config 'tests/fixtures/xray-api.json'
           if ($LASTEXITCODE -ne 0) { throw 'Installed Xray failed validation' }
           $exe = Join-Path $installDir 'simpleray.exe'
-          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-          $prefKey = 'HKCU:\Software\SimpleRay'
-          $startupValue = Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue
-          $preferenceValue = Get-ItemPropertyValue $prefKey -Name StartWithWindows -ErrorAction SilentlyContinue
-          Remove-ItemProperty $runKey -Name SimpleRay -ErrorAction SilentlyContinue
-          Remove-ItemProperty $prefKey -Name StartWithWindows -ErrorAction SilentlyContinue
+          $registry = [Microsoft.Win32.Registry]::CurrentUser
+          $runKey = $registry.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
+          $prefKey = $registry.CreateSubKey('Software\SimpleRay')
+          $startupValue = $runKey.GetValue('SimpleRay')
+          $preferenceValue = $prefKey.GetValue('StartWithWindows')
+          $runKey.DeleteValue('SimpleRay', $false)
+          $prefKey.DeleteValue('StartWithWindows', $false)
           $debugListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
           $debugListener.Start()
           $debugPort = $debugListener.LocalEndpoint.Port
@@ -121,7 +122,7 @@ jobs:
             }
             if ($first.MainWindowHandle -eq 0) { throw 'Installed app did not open a window' }
             $expectedStartup = '"' + $exe + '" --minimized'
-            $actualStartup = Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue
+            $actualStartup = $runKey.GetValue('SimpleRay')
             if ($actualStartup -ne $expectedStartup) { throw "Start with Windows was not registered by default: $actualStartup" }
             node scripts/tray-webview-smoke.mjs $debugPort
             if ($LASTEXITCODE -ne 0) { throw 'Installed tray WebView checks failed' }
@@ -137,8 +138,7 @@ jobs:
             $first.WaitForExit()
           }
           try {
-            New-Item -Path $prefKey -Force | Out-Null
-            New-ItemProperty -Path $prefKey -Name StartWithWindows -Value 0 -PropertyType DWord -Force | Out-Null
+            $prefKey.SetValue('StartWithWindows', 0, [Microsoft.Win32.RegistryValueKind]::DWord)
             $disabled = Start-Process -FilePath $exe -PassThru
             try {
               for ($i=0; $i -lt 20 -and $disabled.MainWindowHandle -eq 0; $i++) {
@@ -147,22 +147,24 @@ jobs:
                 if ($disabled.HasExited) { throw 'App exited during startup opt-out check' }
               }
               if ($disabled.MainWindowHandle -eq 0) { throw 'App did not open to check startup opt-out' }
-              if (Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue) { throw 'App did not honor the startup opt-out' }
+              if ($null -ne $runKey.GetValue('SimpleRay')) { throw 'App did not honor the startup opt-out' }
             } finally {
               if (!$disabled.HasExited) { Stop-Process -Id $disabled.Id -Force }
               $disabled.WaitForExit()
             }
-            New-ItemProperty -Path $runKey -Name SimpleRay -Value $expectedStartup -PropertyType String -Force | Out-Null
+            $runKey.SetValue('SimpleRay', $expectedStartup, [Microsoft.Win32.RegistryValueKind]::String)
             $uninstall = Start-Process -FilePath (Join-Path $installDir 'uninstall.exe') -ArgumentList '/S' -PassThru -Wait
             if ($uninstall.ExitCode -ne 0) { throw "NSIS uninstall failed: $($uninstall.ExitCode)" }
-            if (Get-ItemPropertyValue $runKey -Name SimpleRay -ErrorAction SilentlyContinue) { throw 'The uninstaller left its startup entry behind' }
+            if ($null -ne $runKey.GetValue('SimpleRay')) { throw 'The uninstaller left its startup entry behind' }
           } finally {
             if ($null -ne $startupValue) {
-              New-ItemProperty -Path $runKey -Name SimpleRay -Value $startupValue -PropertyType String -Force | Out-Null
-            } else { Remove-ItemProperty $runKey -Name SimpleRay -ErrorAction SilentlyContinue }
+              $runKey.SetValue('SimpleRay', $startupValue, [Microsoft.Win32.RegistryValueKind]::String)
+            } else { $runKey.DeleteValue('SimpleRay', $false) }
             if ($null -ne $preferenceValue) {
-              New-ItemProperty -Path $prefKey -Name StartWithWindows -Value $preferenceValue -PropertyType DWord -Force | Out-Null
-            } else { Remove-ItemProperty $prefKey -Name StartWithWindows -ErrorAction SilentlyContinue }
+              $prefKey.SetValue('StartWithWindows', $preferenceValue, [Microsoft.Win32.RegistryValueKind]::DWord)
+            } else { $prefKey.DeleteValue('StartWithWindows', $false) }
+            $runKey.Dispose()
+            $prefKey.Dispose()
           }
       - name: Deliver the tested installer as a private draft
         if: github.ref == 'refs/heads/build/simpleray-beta10'

@@ -44,6 +44,7 @@ try{
     return result.result.value;
   }
   await call('Emulation.setDeviceMetricsOverride',{width:356,height:370,deviceScaleFactor:1,mobile:false});
+  await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
   for(let attempt=0;attempt<30;attempt++){
     if(await evaluate('document.readyState === "complete" && !!document.querySelector("#trayOpen")'))break;
     await sleep(150);
