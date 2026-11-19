@@ -1,17 +1,24 @@
 # SimpleRay — current status
 
 **Updated** 2026-11-19  
-**Version** 0.5.0-beta.2, Windows x64  
+**Version** 0.5.0-beta.3, Windows x64  
 **Repository** `AmirrezaShafiei/SimpleRay` (private)  
-**Build commit** `e942cbbb527a34290c5bbb1f0da67236ce1fb27d`
+**Build commit** `c09ffda56254bf43125e7de6e9a5a2aa9ed73c00`
 
 The six-phase beta is available as a Windows x64 setup with the official Xray-core v26.11.9 and its geo databases included. The installer is unsigned.
 
-- [Windows setup](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.2/SimpleRay_0.5.0-beta.2_x64-setup.exe)
-- [Private beta release and SHA-256 checksums](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.2)
-- [Windows build and installation run](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44426856247)
+- [Windows setup](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.3/SimpleRay_0.5.0-beta.3_x64-setup.exe)
+- [Private beta release and SHA-256 checksums](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.3)
+- [Windows build and installation run](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44430654335)
 
-## Review by phase
+## Beta.3 changes verified
+
+- Removed the outer app frame. The theme-colored titlebar provides minimize, maximize, restore and close. The initial window opens at 960 × 620 logical pixels and shows the installed app version.
+- WinINet applies and verifies the Windows user proxy by default on connection. If it is switched off during a session, the footer offers **Restore proxy**. Windows CI passed an actual set, read-back and restore test.
+- The small button beside Live latency sends a fresh HTTPS probe through the running Xray proxy. The frontend displays a result or **No reply** and ignores results from a previous connection.
+- The 54 JavaScript checks passed. Windows CI installed the new setup, opened the app and passed the single-instance check.
+
+## Initial six-phase review
 
 | Phase | Changes and checks |
 |---|---|
