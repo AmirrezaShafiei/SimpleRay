@@ -24,10 +24,11 @@ pub struct ConnectionStatus {
     pub download_bps:f64,
     pub upload_bps:f64,
     pub traffic_available:bool,
+    pub initial_latency_ms:Option<u64>,
     pub error:Option<String>,
 }
 impl ConnectionStatus {
-    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,download_bps:0.,upload_bps:0.,traffic_available:false,error}}
+    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,download_bps:0.,upload_bps:0.,traffic_available:false,initial_latency_ms:None,error}}
 }
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -53,6 +54,7 @@ struct Active {
     upload_bps:f64,
     traffic_available:bool,
     system_proxy:bool,
+    initial_latency_ms:u64,
 }
 #[derive(Default)]
 struct EngineRuntime {active:Option<Active>,last_error:Option<String>}
@@ -191,10 +193,13 @@ impl EngineManager {
             return self.snapshot_locked(&runtime);
         }
         let new_core=start_xray(app,outbound,true).await?;
-        if let Err(e)=probe_once(new_core.proxy_port).await{
-            kill(new_core).await;
-            return Err(format!("Connection verification failed: {e}"));
-        }
+        let initial_latency_ms=match probe_once(new_core.proxy_port).await {
+            Ok(ms)=>ms,
+            Err(error)=>{
+                kill(new_core).await;
+                return Err(format!("Connection verification failed: {error}"));
+            }
+        };
         let previous_port=runtime.active.as_ref().map(|a|a.core.proxy_port);
         let backup=if let Some(old_port)=previous_port{
             let mut snapshot=runtime.active.as_ref().ok_or("Existing session disappeared")?.backup.clone();
@@ -212,7 +217,7 @@ impl EngineManager {
         let server_id=server_id.clone();
         runtime.active=Some(Active{
             core:new_core,server_id,backup,last_poll:Instant::now(),
-            download_bps:0.,upload_bps:0.,traffic_available:false,system_proxy:true,
+            download_bps:0.,upload_bps:0.,traffic_available:false,system_proxy:true,initial_latency_ms,
         });
         runtime.last_error=None;
         self.snapshot_locked(&runtime)
@@ -228,12 +233,38 @@ impl EngineManager {
         runtime.last_error=None;
         Ok(ConnectionStatus::off(None))
     }
+    pub async fn repair_system_proxy(&self, app: &AppHandle) -> Result<ConnectionStatus, String> {
+        let mut runtime=self.runtime.lock().await;
+        Self::reap_core(app,&mut runtime).await;
+        let active=runtime.active.as_mut().ok_or("Connect a configuration first")?;
+        let port=active.core.proxy_port;
+        if !system_proxy::is_active(port)? {
+            active.backup=system_proxy::enable(app,port)?;
+        }
+        active.system_proxy=true;
+        self.snapshot_locked(&runtime)
+    }
+    pub async fn ping_active(&self, server_id: &str) -> Result<u64, String> {
+        let port={
+            let runtime=self.runtime.lock().await;
+            let active=runtime.active.as_ref().filter(|active| active.server_id==server_id)
+                .ok_or("This configuration is no longer active")?;
+            active.core.proxy_port
+        };
+        let result=probe_once(port).await;
+        let runtime=self.runtime.lock().await;
+        if !runtime.active.as_ref().is_some_and(|active| active.core.proxy_port==port
+            && active.server_id==server_id) {
+            return Err("The active connection changed during the probe".into());
+        }
+        result
+    }
     fn snapshot_locked(&self,session:&EngineRuntime)->Result<ConnectionStatus,String>{
         if let Some(active)=&session.active{
             Ok(ConnectionStatus{state:"connected".into(),server_id:Some(active.server_id.clone()),
                 system_proxy:active.system_proxy,download_bps:active.download_bps,upload_bps:active.upload_bps,
-                traffic_available:active.traffic_available,
-                error:(!active.system_proxy).then(||"Windows System Proxy was changed outside SimpleRay".into())})
+                traffic_available:active.traffic_available,initial_latency_ms:Some(active.initial_latency_ms),
+                error:(!active.system_proxy).then(||"Windows System Proxy is off. Restore it to route Windows traffic.".into())})
         }else{Ok(ConnectionStatus::off(session.last_error.clone()))}
     }
     pub async fn status(&self,app:&AppHandle)->Result<ConnectionStatus,String>{
@@ -243,9 +274,7 @@ impl EngineManager {
             if active.last_poll.elapsed()>=Duration::from_millis(900){
                 let elapsed=active.last_poll.elapsed().as_secs_f64().max(0.001);
                 active.last_poll=Instant::now();
-                if let Ok(enabled)=system_proxy::is_active(active.core.proxy_port) {
-                    active.system_proxy=enabled;
-                }
+                active.system_proxy=matches!(system_proxy::is_active(active.core.proxy_port),Ok(true));
                 if let Some(api_port)=active.core.api_port{
                     match query_traffic(app,api_port).await{
                         Ok((up,down))=>{

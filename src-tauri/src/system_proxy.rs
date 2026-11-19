@@ -9,10 +9,18 @@ use tauri::{AppHandle,Manager};
 pub struct ProxyBackup {
     pub original_enabled: Option<u32>,
     pub original_server: Option<String>,
-    pub original_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original_connection: Option<ConnectionProxy>,
     pub active_port: u16,
     #[serde(default)]
     pub previous_port: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct ConnectionProxy {
+    flags: u32,
+    server: String,
+    bypass: String,
 }
 fn record_path(app:&AppHandle)->Result<PathBuf,String>{
     let dir=app.path().app_local_data_dir().map_err(|_|"Cannot access application data directory")?;
@@ -25,21 +33,102 @@ fn expected(port:u16)->String{format!("http=127.0.0.1:{port};https=127.0.0.1:{po
 mod imp {
     use super::*;
     use std::io::{ErrorKind, Write};
+    use std::{mem::size_of, ptr::{null, null_mut}};
+    use windows_sys::Win32::{Foundation::GlobalFree, Networking::WinInet::{
+        InternetQueryOptionW, InternetSetOptionW, INTERNET_OPTION_PER_CONNECTION_OPTION,
+        INTERNET_OPTION_PROXY_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
+        INTERNET_PER_CONN_FLAGS, INTERNET_PER_CONN_OPTION_LISTW, INTERNET_PER_CONN_OPTIONW,
+        INTERNET_PER_CONN_OPTIONW_0, INTERNET_PER_CONN_PROXY_BYPASS, INTERNET_PER_CONN_PROXY_SERVER,
+        PROXY_TYPE_AUTO_DETECT, PROXY_TYPE_AUTO_PROXY_URL, PROXY_TYPE_DIRECT, PROXY_TYPE_PROXY,
+    }};
     use winreg::{enums::{HKEY_CURRENT_USER,KEY_READ,KEY_SET_VALUE,KEY_QUERY_VALUE},RegKey};
     const INTERNET_SETTINGS:&str=r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-    #[link(name="wininet")]
-    extern "system" {
-        fn InternetSetOptionW(handle:*mut core::ffi::c_void,option:u32,buffer:*mut core::ffi::c_void,length:u32)->i32;
-    }
+    const MANUAL_FLAGS: u32 = PROXY_TYPE_DIRECT | PROXY_TYPE_PROXY;
+    const LOCAL_BYPASS: &str = "<local>";
+
     fn notify_windows()->Result<(),String>{
-        const SETTINGS_CHANGED:u32=39;
-        const REFRESH:u32=37;
         unsafe {
-            if InternetSetOptionW(std::ptr::null_mut(),SETTINGS_CHANGED,std::ptr::null_mut(),0)==0
-            || InternetSetOptionW(std::ptr::null_mut(),REFRESH,std::ptr::null_mut(),0)==0 {
+            InternetSetOptionW(null(), INTERNET_OPTION_PROXY_SETTINGS_CHANGED, null(), 0);
+            let changed = InternetSetOptionW(null(), INTERNET_OPTION_SETTINGS_CHANGED, null(), 0);
+            let refreshed = InternetSetOptionW(null(), INTERNET_OPTION_REFRESH, null(), 0);
+            if changed == 0 || refreshed == 0 {
                 return Err("Windows proxy notification failed".into());
             }
         }
+        Ok(())
+    }
+    fn option_list(options: &mut [INTERNET_PER_CONN_OPTIONW]) -> INTERNET_PER_CONN_OPTION_LISTW {
+        INTERNET_PER_CONN_OPTION_LISTW {
+            dwSize: size_of::<INTERNET_PER_CONN_OPTION_LISTW>() as u32,
+            pszConnection: null_mut(), // Default LAN connection for the current Windows user.
+            dwOptionCount: options.len() as u32,
+            dwOptionError: 0,
+            pOptions: options.as_mut_ptr(),
+        }
+    }
+    fn take_option_string(ptr: *mut u16) -> String {
+        if ptr.is_null() { return String::new(); }
+        // WinINet returns a null-terminated string owned by the caller.
+        unsafe {
+            let mut len = 0;
+            while *ptr.add(len) != 0 { len += 1; }
+            let value = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+            GlobalFree(ptr.cast());
+            value
+        }
+    }
+    fn current_connection() -> Result<ConnectionProxy, String> {
+        let mut options = [INTERNET_PER_CONN_OPTIONW::default(); 3];
+        options[0].dwOption = INTERNET_PER_CONN_FLAGS;
+        options[1].dwOption = INTERNET_PER_CONN_PROXY_SERVER;
+        options[2].dwOption = INTERNET_PER_CONN_PROXY_BYPASS;
+        let mut list = option_list(&mut options);
+        let mut size = list.dwSize;
+        let ok = unsafe { InternetQueryOptionW(null(), INTERNET_OPTION_PER_CONNECTION_OPTION,
+            (&mut list as *mut INTERNET_PER_CONN_OPTION_LISTW).cast(), &mut size) };
+        let server = take_option_string(unsafe { options[1].Value.pszValue });
+        let bypass = take_option_string(unsafe { options[2].Value.pszValue });
+        if ok == 0 { return Err("Cannot read Windows System Proxy settings".into()); }
+        Ok(ConnectionProxy { flags: unsafe { options[0].Value.dwValue }, server, bypass })
+    }
+    fn set_connection(proxy: &ConnectionProxy) -> Result<(), String> {
+        let mut server: Vec<u16> = proxy.server.encode_utf16().chain([0]).collect();
+        let mut bypass: Vec<u16> = proxy.bypass.encode_utf16().chain([0]).collect();
+        let mut options = [
+            INTERNET_PER_CONN_OPTIONW { dwOption: INTERNET_PER_CONN_FLAGS,
+                Value: INTERNET_PER_CONN_OPTIONW_0 { dwValue: proxy.flags } },
+            INTERNET_PER_CONN_OPTIONW { dwOption: INTERNET_PER_CONN_PROXY_SERVER,
+                Value: INTERNET_PER_CONN_OPTIONW_0 { pszValue: server.as_mut_ptr() } },
+            INTERNET_PER_CONN_OPTIONW { dwOption: INTERNET_PER_CONN_PROXY_BYPASS,
+                Value: INTERNET_PER_CONN_OPTIONW_0 { pszValue: bypass.as_mut_ptr() } },
+        ];
+        let list = option_list(&mut options);
+        let ok = unsafe { InternetSetOptionW(null(), INTERNET_OPTION_PER_CONNECTION_OPTION,
+            (&list as *const INTERNET_PER_CONN_OPTION_LISTW).cast(), list.dwSize) };
+        if ok == 0 { return Err("Windows refused to change System Proxy".into()); }
+        notify_windows()
+    }
+    fn listener_matches(server: &str, port: u16) -> bool {
+        let endpoint = format!("127.0.0.1:{port}");
+        if server.trim() == endpoint { return true; }
+        let routes = server.split(';').filter_map(|item| item.split_once('='));
+        let mut http = false;
+        let mut https = false;
+        for (scheme, address) in routes {
+            if scheme.trim().eq_ignore_ascii_case("http") {
+                http = address.trim() == endpoint;
+            } else if scheme.trim().eq_ignore_ascii_case("https") {
+                https = address.trim() == endpoint;
+            }
+        }
+        http && https
+    }
+    fn app_connection(port: u16) -> ConnectionProxy {
+        ConnectionProxy { flags: MANUAL_FLAGS, server: expected(port), bypass: LOCAL_BYPASS.into() }
+    }
+    fn apply_listener(port: u16) -> Result<(), String> {
+        set_connection(&app_connection(port))?;
+        if !is_active(port)? { return Err("Windows did not apply SimpleRay's System Proxy settings".into()); }
         Ok(())
     }
     fn key()->Result<RegKey,String>{
@@ -77,47 +166,40 @@ mod imp {
         }
     }
     pub fn is_active(port: u16) -> Result<bool, String> {
-        let k = key()?;
-        Ok(optional_value::<u32>(&k, "ProxyEnable")? == Some(1)
-            && optional_value::<String>(&k, "ProxyServer")?.as_deref() == Some(&expected(port)))
+        let current = current_connection()?;
+        Ok(current.flags & (PROXY_TYPE_PROXY | PROXY_TYPE_AUTO_DETECT | PROXY_TYPE_AUTO_PROXY_URL)
+            == PROXY_TYPE_PROXY && listener_matches(&current.server, port)
+            && current.bypass.trim().eq_ignore_ascii_case(LOCAL_BYPASS))
     }
     pub fn enable(app:&AppHandle,port:u16)->Result<ProxyBackup,String>{
         // Snapshot must be durable BEFORE changing the registry: crash recovery.
         recover(app)?;
-        let k=key()?;
         let old=ProxyBackup{
-            original_enabled:optional_value(&k,"ProxyEnable")?,
-            original_server:optional_value(&k,"ProxyServer")?,
-            original_override:None,
+            original_enabled:None,
+            original_server:None,
+            original_connection:Some(current_connection()?),
             active_port:port,
             previous_port:None,
         };
         let path=record_path(app)?;
         write_record(&path, &old, false)?;
-        if k.set_value("ProxyServer",&expected(port)).and_then(|_|k.set_value("ProxyEnable",&1u32)).is_err(){
-            // Registry may have been only partly modified; roll back immediately.
+        if let Err(error)=apply_listener(port) {
             let _=restore(app,&old,port);
-            return Err("Failed to enable Windows System Proxy".into());
+            return Err(error);
         }
-        if let Err(e)=notify_windows(){let _=restore(app,&old,port);return Err(e)}
         Ok(old)
     }
     pub fn switch(app:&AppHandle,backup:&mut ProxyBackup,old:u16,new_port:u16)->Result<(),String>{
-        let k=key()?;
-        if !is_active(old)?{return Err("System Proxy was changed externally; disconnect before switching".into())}
+        if !is_active(old)?{return Err("Windows System Proxy is off. Restore it before switching.".into())}
         let path=record_path(app)?;
         let mut next=backup.clone();next.active_port=new_port;next.previous_port=Some(old);
         // During a crash window both endpoints should be recognized as ours.
         write_record(&path, &next, true)?;
-        if k.set_value("ProxyServer",&expected(new_port)).is_err(){
-            return Err("Windows proxy switch failed".into());
-        }
-        if let Err(e)=notify_windows(){
-            if k.set_value("ProxyServer",&expected(old)).is_ok() {
-                let _=notify_windows();
-                return Err(e);
+        if let Err(error)=apply_listener(new_port) {
+            if apply_listener(old).is_ok() || !matches!(is_active(new_port), Ok(true)) {
+                return Err(error);
             }
-            // The registry now points to the new listener. Keep it alive.
+            // If Windows kept the new listener, keep its process alive as well.
         }
         *backup=next;
         Ok(())
@@ -134,6 +216,20 @@ mod imp {
         Ok(())
     }
     pub fn restore(app:&AppHandle,b:&ProxyBackup,expected_port:u16)->Result<(),String>{
+        if let Some(original) = &b.original_connection {
+            let current = current_connection()?;
+            if listener_matches(&current.server, expected_port)
+                || b.previous_port.is_some_and(|old|listener_matches(&current.server, old)) {
+                let mut restored = original.clone();
+                if current.flags != MANUAL_FLAGS { restored.flags = current.flags; }
+                if !current.bypass.trim().eq_ignore_ascii_case(LOCAL_BYPASS) { restored.bypass = current.bypass; }
+                set_connection(&restored)?;
+            } else if current == *original {
+                notify_windows()?;
+            }
+            return remove_record(&record_path(app)?);
+        }
+        // Upgrade recovery from releases that stored only the legacy registry values.
         let k=key()?;
         let server=optional_value::<String>(&k,"ProxyServer")?;
         let enabled=optional_value::<u32>(&k,"ProxyEnable")?;
@@ -157,6 +253,28 @@ mod imp {
         };
         let record:ProxyBackup=serde_json::from_slice(&bytes).map_err(|_|"Invalid proxy recovery file")?;
         restore(app,&record,record.active_port)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn matches_both_wininet_routes() {
+            assert!(listener_matches("https=127.0.0.1:54321;HTTP=127.0.0.1:54321", 54321));
+            assert!(listener_matches("127.0.0.1:54321", 54321));
+            assert!(!listener_matches("http=127.0.0.1:54321;https=127.0.0.1:99", 54321));
+        }
+
+        #[test]
+        #[ignore = "changes the Windows user's proxy temporarily; run in an isolated runner"]
+        fn wininet_system_proxy_round_trip() {
+            let original = current_connection().expect("read initial Windows proxy settings");
+            let result = apply_listener(54321).and_then(|_| is_active(54321));
+            set_connection(&original).expect("restore initial Windows proxy settings");
+            assert_eq!(current_connection().unwrap(), original);
+            assert_eq!(result, Ok(true));
+        }
     }
 }
 #[cfg(not(target_os="windows"))]

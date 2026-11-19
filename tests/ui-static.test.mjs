@@ -24,3 +24,23 @@ test('theme, settings, native capability messages and latency-text only',()=>{
   assert.match(css,/\.latency-good\{color:var\(--green\)\}/);
   assert.doesNotMatch(css,/\.latency-text\{[^}]*background:/);
 });
+test('the compact desktop window uses one themed titlebar with working controls',()=>{
+  const [window]=JSON.parse(readFileSync('src-tauri/tauri.conf.json','utf8')).app.windows;
+  assert.equal(window.decorations,false);
+  assert.ok(window.width<1100&&window.height<700);
+  assert.match(html,/<header class="app-titlebar" data-tauri-drag-region>/);
+  assert.match(css,/\.app-titlebar\{[^}]*background:var\(--panel\)/);
+  for(const id of ['windowMinimize','windowMaximize','windowClose']){
+    assert.ok(html.includes(`id="${id}"`));
+    assert.ok(js.includes(`'${id}'`));
+  }
+  assert.match(js,/plugin:app\|version/);
+});
+test('the connection panel separates live latency and actual System Proxy status',()=>{
+  const engine=readFileSync('src-tauri/src/engine.rs','utf8');
+  assert.match(html,/id="activePingButton"[^>]*hidden/);
+  assert.match(js,/nativeInvoke\('ping_active_connection',\{serverId:request.serverId\}\)/);
+  assert.match(engine,/fn ping_active[\s\S]*?let result=probe_once\(port\).await/);
+  assert.match(html,/id="systemProxyStatus">Auto with connection/);
+  assert.match(js,/nativeInvoke\('restore_system_proxy'\)/);
+});

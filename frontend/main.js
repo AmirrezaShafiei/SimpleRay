@@ -15,6 +15,44 @@ const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false
 let toastTimeout;
 let connectionPoll;
 let connectionRevision=0;
+let activePing;
+let activeLatency;
+
+function icon(name){
+  return `<svg class="ui-icon" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
+}
+
+function initWindowChrome(){
+  const windowArgs={label:'main'};
+  const maximize=$('windowMaximize');
+  document.querySelector('.window-actions').hidden=false;
+  const syncMaximize=async()=>{
+    const isMaximized=await nativeInvoke('plugin:window|is_maximized',windowArgs);
+    const label=isMaximized?'Restore window':'Maximize';
+    maximize.innerHTML=icon(isMaximized?'restore':'maximize');
+    maximize.setAttribute('aria-label',label);
+    maximize.title=label;
+  };
+  for(const [id,command] of [
+    ['windowMinimize','minimize'],['windowMaximize','toggle_maximize'],['windowClose','close']
+  ]){
+    $(id).addEventListener('click',async()=>{
+      try{
+        await nativeInvoke(`plugin:window|${command}`,windowArgs);
+        if(id==='windowMaximize')await syncMaximize();
+      }catch(error){toast(errorMessage(error))}
+    });
+  }
+  let frame;
+  window.addEventListener('resize',()=>{
+    cancelAnimationFrame(frame);
+    frame=requestAnimationFrame(()=>void syncMaximize().catch(()=>{}));
+  });
+  void nativeInvoke('plugin:app|version').then(version=>{
+    $('appVersion').textContent=`v${version}`;
+    $('appVersion').hidden=false;
+  }).catch(()=>{});
+}
 function renderDesktopSettings(){
   for (const [id,checked] of [['trayToggle',desktop.minimizeToTray],['autoConnectToggle',desktop.autoConnect],['startupToggle',desktop.startup]]){
     const input=$(id);input.checked=Boolean(checked);input.disabled=!nativeHost()||desktop.loading;
@@ -75,18 +113,27 @@ function renderConnection(){
   const c=state.connection;
   const connected=c.state==='connected';
   const active=connected?state.servers.find(s=>s.id===c.serverId)||null:null;
-  const server=active||getSelected();
+  const server=connected?active:getSelected();
   const disabled=!nativeHost()||state.connectionBusy||(!connected&&!server);
   $('connectionSwitch').disabled=Boolean(disabled);
   $('connectionSwitch').setAttribute('aria-checked',String(connected));
   $('connectionSwitch').setAttribute('aria-label',connected?'Disconnect':'Connect');
-  const status=state.connectionBusy|| (connected?'Connected':'Disconnected');
+  const status=state.connectionBusy||(connected?(c.systemProxy?'Connected':'System Proxy off'):'Disconnected');
   $('connectionState').textContent=status;
-  $('stateLed').title=state.connectionBusy||(connected?'Verified through Xray local proxy':'Disconnected');
-  $('selectedFlag').textContent=server?.flag||'🌐';
+  $('stateLed').title=state.connectionBusy||status;
+  $('stateLed').classList.toggle('proxy-off',connected&&!c.systemProxy);
   $('selectedText').textContent=server?`${server.name} · ${server.type}`:connected?'Current connection':'No server selected';
-  $('selectedLatency').textContent=typeof server?.latency==='number'?`${server.latency} ms`:'—';
-  $('selectedLatency').className=latencyClass(server?.latency);
+  const result=connected&&activeLatency?.serverId===c.serverId?activeLatency:null;
+  const ms=connected?(result?result.ms:c.initialLatencyMs):server?.latency;
+  const pinging=connected&&activePing?.revision===connectionRevision;
+  $('latencyLabel').textContent=connected?'Live latency':'Latency';
+  const latencyText=pinging?'Testing…':result?.error?'No reply':Number.isFinite(ms)?`${ms} ms`:'—';
+  if($('selectedLatency').textContent!==latencyText)$('selectedLatency').textContent=latencyText;
+  $('selectedLatency').className=result?.error?'live-ping-failed':latencyClass(ms);
+  $('selectedLatency').title=result?.error||'';
+  $('activePingButton').hidden=!connected;
+  $('activePingButton').disabled=Boolean(pinging||state.connectionBusy);
+  $('activePingButton').setAttribute('aria-busy',String(pinging));
   $('traffic').hidden=!connected;
   $('downRate').textContent=c.trafficAvailable?bytesPerSecond(c.downloadBps):'—';
   $('upRate').textContent=c.trafficAvailable?bytesPerSecond(c.uploadBps):'—';
@@ -94,7 +141,10 @@ function renderConnection(){
   $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('connecting',Boolean(state.connectionBusy));
   $('footerConnection').lastChild.textContent=connected&&!state.connectionBusy&&c.systemProxy?' Connected · System Proxy':` ${status}`;
-  $('systemProxyStatus').textContent=c.systemProxy?'Active':'Inactive';
+  $('systemProxyStatus').textContent=connected?(c.systemProxy?'Active':'Off'):'Auto with connection';
+  $('systemProxyStatus').dataset.state=connected?(c.systemProxy?'active':'off'):'automatic';
+  $('repairProxyButton').hidden=!connected||c.systemProxy;
+  $('repairProxyButton').disabled=Boolean(state.connectionBusy);
 }
 async function refreshConnectionStatus({silent=false}={}){
   if(!nativeHost()||state.connectionBusy||connectionPoll)return;
@@ -105,6 +155,7 @@ async function refreshConnectionStatus({silent=false}={}){
     if(revision!==connectionRevision)return;
     const previous=state.connection;
     state.connection=current;
+    if(current.serverId!==previous.serverId)activeLatency=null;
     if(state.connection.error&&state.connection.error!==previous.error)toast(state.connection.error);
     renderConnection();
   }catch(err){if(!silent&&revision===connectionRevision)toast(errorMessage(err));}
@@ -121,7 +172,8 @@ async function connectSelected(id=state.selected){
   try{
     const outbound=outboundFromShareLink(server.uri);
     state.connection=await nativeInvoke('connect_server',{serverId:id,outbound});
-    toast('Connected through Xray-core');
+    activeLatency=null;
+    toast('Connected · Windows System Proxy is active');
   }catch(err){toast(errorMessage(err))}
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
@@ -129,7 +181,7 @@ async function disconnectConnection(){
   if(!nativeHost()||state.connectionBusy)return;
   connectionRevision++;
   state.connectionBusy='Disconnecting…';renderConnection();
-  try{state.connection=await nativeInvoke('disconnect_server');toast('Disconnected');}
+  try{state.connection=await nativeInvoke('disconnect_server');activeLatency=null;toast('Disconnected');}
   catch(err){toast(errorMessage(err))}
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
@@ -137,13 +189,40 @@ async function toggleConnection(){
   if(state.connection.state==='connected')await disconnectConnection();
   else await connectSelected();
 }
+async function restoreSystemProxy(){
+  if(state.connectionBusy||state.connection.state!=='connected')return;
+  connectionRevision++;
+  state.connectionBusy='Restoring proxy…';
+  renderConnection();
+  try{
+    state.connection=await nativeInvoke('restore_system_proxy');
+    toast('Windows System Proxy restored');
+  }catch(error){toast(errorMessage(error))}
+  finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
+}
+async function testActiveConnection(){
+  if(state.connection.state!=='connected'||state.connectionBusy||activePing?.revision===connectionRevision)return;
+  const request={serverId:state.connection.serverId,revision:connectionRevision};
+  activePing=request;
+  renderConnection();
+  const stillActive=()=>request.revision===connectionRevision&&state.connection.serverId===request.serverId;
+  try{
+    const ms=await nativeInvoke('ping_active_connection',{serverId:request.serverId});
+    if(stillActive())activeLatency={serverId:request.serverId,ms};
+  }catch(error){
+    if(stillActive())activeLatency={serverId:request.serverId,error:errorMessage(error)};
+  }finally{
+    if(activePing===request)activePing=null;
+    renderConnection();
+  }
+}
 async function pingServers(servers,samples){
   if(!nativeHost()){toast('Real latency testing requires the native app and Xray-core');return}
   if(state.pingBusy){toast('A latency test is already running');return}
   if(!servers.length){toast('No configurations to test');return}
   state.pingBusy=true;state.pingAbort=false;
   const button=$('pingAllButton');
-  button.setAttribute('aria-busy','true');button.innerHTML='<span class="glyph">×</span> Cancel ping';
+  button.setAttribute('aria-busy','true');button.innerHTML=`${icon('close')} <span>Cancel ping</span>`;
   try{
     const summary=await pingPool(servers,samples,
       async server=>nativeInvoke('measure_server_latency',{outbound:outboundFromShareLink(server.uri),samples}),
@@ -158,14 +237,14 @@ async function pingServers(servers,samples){
       },{concurrency:3,shouldStop:()=>state.pingAbort});
     toast(`Real-delay tests ${summary.cancelled?'cancelled':'completed'}: ${summary.finished}/${summary.total}`);
   }catch(err){toast(errorMessage(err))}
-  finally{state.pingBusy=false;state.pingAbort=false;button.removeAttribute('aria-busy');button.innerHTML='<span class="glyph">⌁</span> Ping <span class="muted-sub">All</span>';}
+  finally{state.pingBusy=false;state.pingAbort=false;button.removeAttribute('aria-busy');button.innerHTML=`${icon('activity')} <span>Ping <span class="muted-sub">All</span></span>`;}
 }
 
-function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').textContent=active?(state.sortDirection==='asc'?'↑':'↓'):'↕';btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
+function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').innerHTML=icon(active?(state.sortDirection==='asc'?'up':'down'):'sort');btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
 function orderedRows(){const rows=filterServers(state.servers,state.query);return state.sortKey?sortServers(rows,state.sortKey,state.sortDirection):rows}
 function renderTable(){const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
-    const starCell=tr.insertCell();const star=document.createElement('button');star.className='star'+(s.favorite?' is-favorite':'');star.textContent=s.favorite?'★':'☆';star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);star.addEventListener('click',e=>{e.stopPropagation();toggleFavorite(s.id)});starCell.append(star);
-    const nameCell=tr.insertCell();const wrap=document.createElement('div');wrap.className='name-cell';const flag=document.createElement('span');flag.className='flag';flag.textContent=s.flag||'🌐';const name=document.createElement('span');name.className='server-name';name.textContent=s.name;wrap.append(flag,name);nameCell.append(wrap);
+    const starCell=tr.insertCell();const star=document.createElement('button');star.className='star'+(s.favorite?' is-favorite':'');star.innerHTML=icon('star');star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);star.addEventListener('click',e=>{e.stopPropagation();toggleFavorite(s.id)});starCell.append(star);
+    const nameCell=tr.insertCell();const wrap=document.createElement('div');wrap.className='name-cell';const flag=document.createElement('span');flag.className='flag';if(s.flag&&s.flag!=='🌐')flag.textContent=s.flag;else flag.innerHTML=icon('globe');const name=document.createElement('span');name.className='server-name';name.textContent=s.name;wrap.append(flag,name);nameCell.append(wrap);
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
     const latencyCell=tr.insertCell();const latency=document.createElement('span');latency.className='latency-text '+latencyClass(s.latency);latency.textContent=typeof s.latency==='number'?`${s.latency}`:s.latencyStatus==='timeout'?'Timeout':s.latencyStatus==='error'?'Failed':'—';latency.title=s.latencyAttempted?`${s.latencySuccess||0}/${s.latencyAttempted} successful real-delay probes`: 'Not measured';latencyCell.append(latency);
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
@@ -177,8 +256,8 @@ function renderTable(){const rows=orderedRows(),body=$('serverRows');const focus
 function render(){renderTable()}
 function toggleFavorite(id){if(safeAction(()=>repo.toggleFavorite(id)))sync()}
 function closeContextMenu(){$('contextMenu').hidden=true;state.contextId=null}
-function addMenuButton(parent,icon,label,action,{disabled=false,danger=false}={}){const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.className='menu-button'+(danger?' menu-danger':'');button.disabled=disabled;const iconSpan=document.createElement('span');iconSpan.className='menu-icon';iconSpan.textContent=icon;const txt=document.createElement('span');txt.textContent=label;button.append(iconSpan,txt);if(!disabled)button.addEventListener('click',()=>{closeContextMenu();action()});parent.append(button);return button}
-function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'▷','Connect / Select',()=>{setSelected(id);void connectSelected(id)});addMenuButton(menu,'⌁','Ping (×1)',()=>void pingServers([s],1));addMenuButton(menu,'≋','Ping (×3) — Average',()=>void pingServers([s],3));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,s.favorite?'★':'☆',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'✎',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'▣','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'♲','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
+function addMenuButton(parent,iconName,label,action,{disabled=false,danger=false}={}){const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.className='menu-button'+(danger?' menu-danger':'');button.disabled=disabled;const iconSpan=document.createElement('span');iconSpan.className='menu-icon';iconSpan.innerHTML=icon(iconName);const txt=document.createElement('span');txt.textContent=label;button.append(iconSpan,txt);if(!disabled)button.addEventListener('click',()=>{closeContextMenu();action()});parent.append(button);return button}
+function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});addMenuButton(menu,'activity','Ping (×1)',()=>void pingServers([s],1));addMenuButton(menu,'activity','Ping (×3) — Average',()=>void pingServers([s],3));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
 function closePasteMenu(){$('pasteMenu').hidden=true;$('pasteMenuButton').setAttribute('aria-expanded','false')}
 function showDialog(id){const target=$(id);for(const dialog of document.querySelectorAll('dialog[open]')){if(dialog!==target)dialog.close()}if(!target.open)target.showModal()}
 function confirmAction(title,description,acceptLabel='Delete',keepLabel=null){return new Promise(resolve=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmDescription').textContent=description;$('confirmAccept').textContent=acceptLabel;$('confirmKeep').hidden=!keepLabel;if(keepLabel)$('confirmKeep').textContent=keepLabel;let done=false;const finish=result=>{if(done)return;done=true;dialog.close();dialog.removeEventListener('close',cancel);$('confirmCancel').removeEventListener('click',onCancel);$('confirmClose').removeEventListener('click',onCancel);$('confirmAccept').removeEventListener('click',onYes);$('confirmKeep').removeEventListener('click',onKeep);resolve(result)};const cancel=()=>finish(false),onCancel=()=>finish(false),onYes=()=>finish(true),onKeep=()=>finish('keep');dialog.addEventListener('close',cancel);$('confirmCancel').addEventListener('click',onCancel);$('confirmClose').addEventListener('click',onCancel);$('confirmAccept').addEventListener('click',onYes);$('confirmKeep').addEventListener('click',onKeep);showDialog('confirmDialog')})}
@@ -220,13 +299,15 @@ async function importClipboard(){let text;try{text=await readClipboardText()}cat
 }
 function init(){if(nativeHost())document.documentElement.classList.add('native-host');applyTheme();$('pingSamples').value=String(state.pingSamples);sync();if(repo.loadError)toast(repo.loadError);
   if(!nativeHost()){$('phaseStatus').textContent='Browser preview';$('runtimeNotice').textContent='Real connection and Ping require the Windows desktop host';}
-  else{void refreshConnectionStatus({silent:true}).then(()=>readDesktopSettings());setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
+  else{initWindowChrome();void refreshConnectionStatus({silent:true}).then(()=>readDesktopSettings());setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
   renderDesktopSettings();
   window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(state.theme==='system')applyTheme()});
   document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'?'desc':'asc'}render()}));
   $('searchInput').addEventListener('input',e=>{state.query=e.target.value;render()});
   $('connectionSwitch').addEventListener('click',()=>void toggleConnection());
-  $('selectedServer').addEventListener('click',()=>{const row=serverRow(state.selected);row?.scrollIntoView({block:'nearest',behavior:'smooth'});row?.focus()});
+  $('activePingButton').addEventListener('click',()=>void testActiveConnection());
+  $('repairProxyButton').addEventListener('click',()=>void restoreSystemProxy());
+  $('selectedServer').addEventListener('click',()=>{const row=serverRow(state.connection.serverId??state.selected);row?.scrollIntoView({block:'nearest',behavior:'smooth'});row?.focus()});
   $('pasteButton').addEventListener('click',importClipboard);
   $('pasteMenuButton').addEventListener('click',()=>{const menu=$('pasteMenu');menu.hidden=!menu.hidden;$('pasteMenuButton').setAttribute('aria-expanded',String(!menu.hidden))});
   $('manualAddButton').addEventListener('click',()=>openManualDialog());

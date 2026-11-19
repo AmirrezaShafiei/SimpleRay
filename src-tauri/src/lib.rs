@@ -54,6 +54,14 @@ async fn connection_status(app:AppHandle,manager:State<'_,EngineManager>)->Resul
     manager.status(&app).await
 }
 #[tauri::command]
+async fn restore_system_proxy(app:AppHandle,manager:State<'_,EngineManager>)->Result<ConnectionStatus,String>{
+    manager.repair_system_proxy(&app).await
+}
+#[tauri::command]
+async fn ping_active_connection(manager:State<'_,EngineManager>,server_id:String)->Result<u64,String>{
+    manager.ping_active(&server_id).await
+}
+#[tauri::command]
 async fn measure_server_latency(app:AppHandle,outbound:Value,samples:u8)->Result<LatencyResult,String>{
     engine::ping_server(&app,outbound,samples).await
 }
@@ -104,7 +112,8 @@ pub fn run(){
         })
         .invoke_handler(tauri::generate_handler![
             read_clipboard_text,fetch_subscription_text,
-            connect_server,disconnect_server,connection_status,measure_server_latency,
+            connect_server,disconnect_server,connection_status,restore_system_proxy,
+            ping_active_connection,measure_server_latency,
             get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window
         ])
         .on_window_event(tray::handle_window_event)

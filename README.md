@@ -2,7 +2,7 @@
 
 Single-window, no-sidebar V2Ray/Xray client with Dark/Light/System themes, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
 
-> **Status:** Version `0.5.0-beta.2` covers Phases 1–6. The Windows x64 installer and its SHA-256 checksum are attached to the private beta release after the Windows build and installation smoke test pass.
+> **Status:** Version `0.5.0-beta.3` covers Phases 1–6. The Windows x64 installer and its SHA-256 checksum are attached to the private beta release after the Windows build and installation smoke test pass.
 
 ## Features in source
 - Clipboard import of VMess, VLESS, Trojan, Shadowsocks, plus manually named subscriptions and update/rename/delete.
