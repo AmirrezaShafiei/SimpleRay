@@ -1,15 +1,23 @@
 # SimpleRay — current status
 
 **Updated** 2026-11-19  
-**Version** 0.5.0-beta.3, Windows x64  
+**Version** 0.5.0-beta.4, Windows x64  
 **Repository** `AmirrezaShafiei/SimpleRay` (private)  
-**Build commit** `c09ffda56254bf43125e7de6e9a5a2aa9ed73c00`
+**Build commit** `640e4eba0cebde9735007ff7c0c77382cb8289c8`
 
 The six-phase beta is available as a Windows x64 setup with the official Xray-core v26.11.9 and its geo databases included. The installer is unsigned.
 
-- [Windows setup](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.3/SimpleRay_0.5.0-beta.3_x64-setup.exe)
-- [Private beta release and SHA-256 checksums](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.3)
-- [Windows build and installation run](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44430654335)
+- [Windows setup](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.4/SimpleRay_0.5.0-beta.4_x64-setup.exe)
+- [Private beta release and SHA-256 checksums](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.4)
+- [Windows build and installation run](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44434435318)
+
+## Beta.4 changes verified
+
+- Native background monitoring updates the active latency every 10 seconds and shows how many of the latest 10 probes answered. This continues in the tray. A manual probe remains available.
+- Settings offers Off (default), Suggest and Automatic. A comparison round uses up to four candidates in saved order from Favorites or one subscription. A healthy connection is eligible for a change after two qualifying rounds, a reduction of at least 150 ms and 40%, and an 80% candidate success rate with at least two samples. A 90-second cooldown applies to latency-driven switching.
+- Two scheduled failures trigger recovery in Suggest or Automatic. Recovery prioritizes a responsive candidate and backs off to 30, 60 and at most 120 seconds if a usable switch is unavailable. Proxy state is displayed separately. Automatic switches can be undone for 20 seconds.
+- Kept the layout and theme palette. The desktop toolbar, search and dialog controls use flatter surfaces, smaller corners and an underlined search field.
+- Windows CI passed 54 JavaScript checks, native tests including the switch policy and WinINet round trip, and the NSIS install/start/single-instance smoke check. The UI flows were also exercised with mocked native responses. Real-profile network transitions still need hands-on verification.
 
 ## Beta.3 changes verified
 
