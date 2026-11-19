@@ -7,11 +7,15 @@ use crate::{engine::EngineManager,preferences::DesktopSettings,switching::TraySu
 #[derive(Default)]
 pub struct ExitGuard(pub AtomicBool);
 
+const PANEL_WINDOW: &str = "tray-panel";
+const PANEL_SIZE: (f64, f64) = (356.0, 388.0);
+
 const SUGGESTION_WINDOW:&str="tray-suggestion";
 const SUGGESTION_SIZE:(f64,f64)=(358.0,146.0);
 const SUGGESTION_GAP:Duration=Duration::from_secs(60);
 
 pub fn show_main(app:&AppHandle) {
+    hide_panel(app);
     if let Some(popup)=app.get_webview_window(SUGGESTION_WINDOW) {let _=popup.hide();}
     if let Some(window)=app.get_webview_window("main") {
         let _=window.show();
@@ -47,29 +51,125 @@ pub fn request_exit(app:AppHandle) {
     });
 }
 
+fn send_to_main(app: &AppHandle, name: &str, payload: &serde_json::Value) -> Result<(), String> {
+    let main=app.get_webview_window("main").ok_or("Main window unavailable")?;
+    dispatch(&main,name,payload)
+}
+
+fn dispatch(window: &WebviewWindow, event: &str, payload: &serde_json::Value) -> Result<(), String> {
+    window.eval(format!("window.dispatchEvent(new CustomEvent('{event}',{{detail:{payload}}}))"))
+        .map_err(|error| error.to_string())
+}
+
+fn hide_panel(app: &AppHandle) {
+    if let Some(panel)=app.get_webview_window(PANEL_WINDOW) {
+        if panel.is_visible().unwrap_or(false) {
+            let _=panel.hide();
+            let _=send_to_main(app,"simpleray:tray-panel-visible",&serde_json::json!(false));
+        }
+    }
+}
+
+fn open_panel(app: &AppHandle, point: PhysicalPosition<f64>) -> tauri::Result<()> {
+    let Some(panel)=app.get_webview_window(PANEL_WINDOW) else { return Ok(()); };
+    if panel.is_visible()? {
+        hide_panel(app);
+        return Ok(());
+    }
+    if let Some(monitor)=panel.monitor_from_point(point.x,point.y)?.or(panel.primary_monitor()?) {
+        let area=monitor.work_area();
+        let scale=monitor.scale_factor();
+        let gap=(6.0*scale).round() as i32;
+        let width=(PANEL_SIZE.0*scale).round() as i32;
+        let height=(PANEL_SIZE.1*scale).round() as i32;
+        let left=area.position.x;
+        let top=area.position.y;
+        let right=left+area.size.width as i32;
+        let bottom=top+area.size.height as i32;
+        let x=(point.x.round() as i32-width/2).clamp(left+gap,(right-width-gap).max(left+gap));
+        let y=(point.y.round() as i32-height-gap).clamp(top+gap,(bottom-height-gap).max(top+gap));
+        panel.set_position(PhysicalPosition::new(x,y))?;
+    }
+    if let Some(notice)=app.get_webview_window(SUGGESTION_WINDOW) { let _=notice.hide(); }
+    panel.show()?;
+    panel.set_focus()?;
+    let _=send_to_main(app,"simpleray:tray-panel-visible",&serde_json::json!(true));
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PanelAction { Refresh, Connect, Disconnect, Retry, Switch, Exit, Close }
+
+pub fn panel_action(app:&AppHandle,window:&WebviewWindow,action:PanelAction,server_id:Option<String>)->Result<(),String>{
+    if window.label()!=PANEL_WINDOW {return Err("Unknown tray panel".into());}
+    if !window.is_visible().unwrap_or(false) {return Ok(());}
+    match action {
+        PanelAction::Exit=>{hide_panel(app);request_exit(app.clone());Ok(())}
+        PanelAction::Close=>{hide_panel(app);Ok(())}
+        PanelAction::Refresh=>send_to_main(app,"simpleray:tray-panel-visible",&serde_json::json!(true)),
+        action=>{
+            let command=match action{
+                PanelAction::Connect=>"connect",
+                PanelAction::Disconnect=>"disconnect",
+                PanelAction::Retry=>"retry",
+                PanelAction::Switch=>"switch",
+                _=>unreachable!(),
+            };
+            if server_id.as_ref().is_some_and(|id|id.len()>256) {return Err("Invalid server selection".into());}
+            send_to_main(app,"simpleray:tray-panel-action",&serde_json::json!({ "action":command,"serverId":server_id }))
+        }
+    }
+}
+
+pub fn publish_panel(app:&AppHandle,window:&WebviewWindow,snapshot:&serde_json::Value)->Result<(),String>{
+    if window.label()!="main" {return Err("Unknown tray panel data source".into());}
+    if let Some(panel)=app.get_webview_window(PANEL_WINDOW).filter(|panel|panel.is_visible().unwrap_or(false)){
+        dispatch(&panel,"simpleray:tray-panel-snapshot",snapshot)?;
+    }
+    Ok(())
+}
+
 pub fn setup(app:&tauri::App)->Result<(), Box<dyn std::error::Error>> {
-    let show=MenuItem::with_id(app,"show","Show SimpleRay",true,None::<&str>)?;
-    let toggle=MenuItem::with_id(app,"toggle","Connect / Disconnect",true,None::<&str>)?;
-    let quit=MenuItem::with_id(app,"quit","Exit SimpleRay",true,None::<&str>)?;
-    let menu=Menu::with_items(app,&[&show,&toggle,&quit])?;
+    let panel=WebviewWindowBuilder::new(app,PANEL_WINDOW,WebviewUrl::App("tray-panel.html".into()))
+        .title("SimpleRay tray panel")
+        .inner_size(PANEL_SIZE.0,PANEL_SIZE.1)
+        .visible(false).focused(false)
+        .decorations(false).resizable(false).always_on_top(true).skip_taskbar(true)
+        .build();
     let icon=app.default_window_icon().ok_or("No SimpleRay tray icon configured")?.clone();
-    TrayIconBuilder::with_id("simpleray-tray")
+    let mut builder=TrayIconBuilder::with_id("simpleray-tray")
         .icon(icon)
         .tooltip("SimpleRay")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app,event|match event.id.as_ref() {
-            "show"=>show_main(app),
-            "toggle"=>request_toggle(app),
-            "quit"=>request_exit(app.clone()),
-            _=>{}
-        })
         .on_tray_icon_event(|tray,event| {
-            if let TrayIconEvent::Click {button:MouseButton::Left,button_state:MouseButtonState::Up,..}=event {
-                show_main(tray.app_handle());
+            if let TrayIconEvent::Click {button,button_state:MouseButtonState::Up,position,..}=event {
+                let app=tray.app_handle();
+                match button {
+                    MouseButton::Left=>show_main(app),
+                    MouseButton::Right=>{
+                        if let Err(error)=open_panel(app,position) {
+                            eprintln!("SimpleRay could not open the tray panel: {error}");
+                        }
+                    }
+                    _=>{}
+                }
             }
-        })
-        .build(app)?;
+        });
+    if let Err(error)=panel {
+        eprintln!("SimpleRay could not prepare the tray panel: {error}");
+        let show=MenuItem::with_id(app,"show","Show SimpleRay",true,None::<&str>)?;
+        let toggle=MenuItem::with_id(app,"toggle","Connect / Disconnect",true,None::<&str>)?;
+        let quit=MenuItem::with_id(app,"quit","Exit SimpleRay",true,None::<&str>)?;
+        let menu=Menu::with_items(app,&[&show,&toggle,&quit])?;
+        builder=builder.menu(&menu).show_menu_on_left_click(false)
+            .on_menu_event(|app,event|match event.id.as_ref() {
+                "show"=>show_main(app),
+                "toggle"=>request_toggle(app),
+                "quit"=>request_exit(app.clone()),
+                _=>{}
+            });
+    }
+    builder.build(app)?;
     if let Err(error)=WebviewWindowBuilder::new(app,SUGGESTION_WINDOW,WebviewUrl::App("tray-suggestion.html".into()))
         .title("SimpleRay server suggestion")
         .inner_size(SUGGESTION_SIZE.0,SUGGESTION_SIZE.1)
@@ -82,6 +182,14 @@ pub fn setup(app:&tauri::App)->Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn handle_window_event(window:&tauri::Window,event:&WindowEvent) {
+    if window.label()==PANEL_WINDOW {
+        match event {
+            WindowEvent::CloseRequested{api,..}=>{api.prevent_close();hide_panel(window.app_handle());}
+            WindowEvent::Focused(false)=>hide_panel(window.app_handle()),
+            _=>{}
+        }
+        return;
+    }
     if window.label()==SUGGESTION_WINDOW {
         if let WindowEvent::CloseRequested{api,..}=event {
             api.prevent_close();
@@ -124,6 +232,10 @@ pub async fn monitor_suggestions(app:&AppHandle) {
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         ticks.tick().await;
+        if app.get_webview_window(PANEL_WINDOW).is_some_and(|panel|panel.is_visible().unwrap_or(false)){
+            if popup.is_visible().unwrap_or(false){let _=popup.hide();}
+            continue;
+        }
         if main.is_visible().unwrap_or(true) && !main.is_minimized().unwrap_or(false) {
             if popup.is_visible().unwrap_or(false) {let _=popup.hide();}
             continue;

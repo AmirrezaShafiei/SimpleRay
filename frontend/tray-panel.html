@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SimpleRAY</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="tray-panel.css">
+</head>
+<body class="tray-body">
+  <main class="tray-panel" aria-label="SimpleRAY connection">
+    <header class="tray-header">
+      <span class="logo tray-logo" aria-hidden="true">
+        <svg class="ui-icon" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M13.4 2 4 13h6.7L9.6 22 20 10.8h-7.1L13.4 2z"/></svg>
+      </span>
+      <strong>SimpleRAY</strong>
+      <span class="tray-mode" id="trayMode">System Proxy</span>
+    </header>
+    <section class="tray-connection" id="trayConnection" aria-label="Connection">
+      <div class="tray-connection-copy">
+        <span class="tray-dot" aria-hidden="true"></span>
+        <span class="tray-flag" id="trayActiveFlag"></span>
+        <span class="tray-name tray-active-name" id="trayActiveName"><span dir="auto">No server selected</span></span>
+        <span class="tray-state" id="trayState" aria-live="polite">Disconnected</span>
+      </div>
+      <button class="tray-action" id="trayConnect" type="button" disabled>Connect</button>
+    </section>
+    <div class="tray-filters">
+      <label class="tray-search">
+        <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input id="traySearch" type="search" aria-label="Search servers" autocomplete="off" spellcheck="false" placeholder="Search servers" aria-controls="trayServers">
+      </label>
+      <details class="tray-groups" id="trayGroups">
+        <summary id="trayGroupLabel" aria-label="Server group"><span>All servers</span><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary>
+        <div id="trayGroupOptions" class="tray-group-options" aria-label="Server groups"></div>
+      </details>
+    </div>
+    <div class="tray-list" id="trayServers" aria-label="Servers">
+      <div class="tray-rows" id="trayRows"></div>
+      <p class="tray-empty" id="trayEmpty" hidden>No matching servers</p>
+    </div>
+    <footer class="tray-footer">
+      <button id="trayExit" type="button">
+        <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v9m4.9-7a8 8 0 1 1-9.8 0"/></svg>
+        Exit
+      </button>
+    </footer>
+    <p class="tray-error" id="trayError" role="alert" hidden></p>
+  </main>
+  <script type="module" src="tray-panel.js"></script>
+</body>
+</html>

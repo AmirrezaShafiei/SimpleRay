@@ -103,6 +103,18 @@ async fn accept_server_suggestion(app:AppHandle,manager:State<'_,EngineManager>,
     manager.accept_switch(&app,&server_id,None).await
 }
 #[tauri::command]
+fn tray_panel_action(app:AppHandle,window:tauri::WebviewWindow,action:tray::PanelAction,server_id:Option<String>)->Result<(),String>{
+    tray::panel_action(&app,&window,action,server_id)
+}
+#[tauri::command]
+fn publish_tray_panel(app:AppHandle,window:tauri::WebviewWindow,snapshot:Value)->Result<(),String>{
+    tray::publish_panel(&app,&window,&snapshot)
+}
+#[tauri::command]
+async fn retry_tray_connection(app:AppHandle,manager:State<'_,EngineManager>,server_id:String)->Result<ConnectionStatus,String>{
+    manager.retry(&app,&server_id).await
+}
+#[tauri::command]
 fn dismiss_tray_suggestion(window:tauri::WebviewWindow)->Result<(),String>{
     tray::dismiss_suggestion(&window)
 }
@@ -223,7 +235,7 @@ pub fn run(){
             connect_server,disconnect_server,connection_status,restore_system_proxy,
             ping_active_connection,measure_server_latency,
             configure_server_switching,accept_server_suggestion,undo_server_switch,
-            dismiss_tray_suggestion,accept_tray_suggestion,
+            dismiss_tray_suggestion,accept_tray_suggestion,tray_panel_action,publish_tray_panel,retry_tray_connection,
             get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window,
             get_routing_settings,set_routing_settings,choose_routing_app,exit_ip_history,error_report,copy_error_report,rename_active_server,cancel_network_recovery
         ])

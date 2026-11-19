@@ -34,11 +34,13 @@ pub struct ConnectionStatus {
     pub download_bytes:Option<u64>,
     pub upload_bytes:Option<u64>,
     pub initial_latency_ms:Option<u64>,
+    pub last_good_ping_ms:Option<u64>,
+    pub outage_seconds:Option<u64>,
     pub error:Option<String>,
     pub health:HealthStatus,
 }
 impl ConnectionStatus {
-    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,connection_mode:Mode::SystemProxy,download_bps:0.,upload_bps:0.,traffic_available:false,download_bytes:None,upload_bytes:None,initial_latency_ms:None,error,health:HealthStatus::default()}}
+    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,connection_mode:Mode::SystemProxy,download_bps:0.,upload_bps:0.,traffic_available:false,download_bytes:None,upload_bytes:None,initial_latency_ms:None,last_good_ping_ms:None,outage_seconds:None,error,health:HealthStatus::default()}}
 }
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -112,6 +114,7 @@ impl Default for EngineManager {
 
 enum ConnectionChange {
     Manual,
+    Retry,
     Suggested(SwitchDecision),
     Automatic(SwitchDecision),
     Undo,
@@ -305,7 +308,7 @@ impl EngineManager {
             if expected.is_some_and(|(generation, revision)| {
                 runtime.pending || runtime.generation != generation || runtime.monitor.revision != revision
             }) { return Err("The connection or switch settings changed".into()); }
-            if !matches!(change,ConnectionChange::Recover(_)) && runtime.active.as_ref().is_some_and(|active| active.server_id==profile.server_id && active.routing==route) {
+            if !matches!(change,ConnectionChange::Recover(_)|ConnectionChange::Retry) && runtime.active.as_ref().is_some_and(|active| active.server_id==profile.server_id && active.routing==route) {
                 return self.snapshot_locked(&runtime);
             }
             runtime.generation = runtime.generation.wrapping_add(1);
@@ -468,6 +471,16 @@ impl EngineManager {
         self.change_connection(app,profile,ConnectionChange::Suggested(decision),Some(version)).await
     }
 
+    pub async fn retry(&self, app: &AppHandle, server_id: &str) -> Result<ConnectionStatus, String> {
+        let (profile,version)={
+            let runtime=self.runtime.lock().await;
+            let profile=runtime.monitor.wanted.as_ref().filter(|profile|profile.server_id==server_id)
+                .cloned().ok_or("The active server has changed")?;
+            (profile,(runtime.generation,runtime.monitor.revision))
+        };
+        self.change_connection(app,profile,ConnectionChange::Retry,Some(version)).await
+    }
+
     pub async fn undo_switch(&self,app:&AppHandle)->Result<ConnectionStatus,String>{
         let (profile,version) = {
             let runtime=self.runtime.lock().await;
@@ -618,12 +631,15 @@ impl EngineManager {
                 system_proxy:active.system_proxy,connection_mode:active.routing.mode,download_bps:active.download_bps,upload_bps:active.upload_bps,
                 traffic_available:active.traffic_available,
                 download_bytes:transferred.map(|bytes|bytes.down),upload_bytes:transferred.map(|bytes|bytes.up),
-                initial_latency_ms:Some(active.initial_latency_ms),health,
+                initial_latency_ms:Some(active.initial_latency_ms),last_good_ping_ms:session.last_good_ping,
+                outage_seconds:session.outage_since.map(|since|since.elapsed().as_secs()),health,
                 error:(!active.route_available()).then(||"Windows System Proxy is off. Restore it to route Windows traffic.".into())})
         }else{
             let mut status=ConnectionStatus::off(session.last_error.clone());
             status.health=health;
-            if recovering {status.server_id=session.monitor.wanted.as_ref().map(|profile|profile.server_id.clone());}
+            status.last_good_ping_ms=session.last_good_ping;
+            status.outage_seconds=session.outage_since.map(|since|since.elapsed().as_secs());
+            if recovering||status.outage_seconds.is_some() {status.server_id=session.monitor.wanted.as_ref().map(|profile|profile.server_id.clone());}
             Ok(status)
         }
     }
