@@ -34,3 +34,10 @@ For manual Xray staging, use `scripts/stage-xray.ps1` with a separately trusted 
 Read [PROJECT_STATUS.md](PROJECT_STATUS.md), [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), then [PHASE5_REPORT.md](PHASE5_REPORT.md) and [PHASE6_REPORT.md](PHASE6_REPORT.md). Screenshot: [design/reference.jpg](design/reference.jpg).
 
 Core reference: [XTLS/Xray-core](https://github.com/XTLS/Xray-core) (MPL-2.0). V2Fly/V2Ray (MIT) consulted as conceptual reference, not directly copied.
+
+## Version 0.5.0-beta.5 UI enhancements
+- Quick Switch: left click on Tray icon opens searchable compact server list; suggestion in Suggest mode can appear unobtrusively when main window is hidden, with a Switch action. No automatic selection in Suggest mode.
+- Appearance: Ocean, Forest, Violet or Custom (separate Primary + Accent colors). Select Light/Dark/System **independently** of palette.
+- Ping All: **2 successful real-delay attempts averaged by default**, configurable to 1/2/3. Right-click single-server ping also offers x2.
+- UI is still one main window without left sidebar. New quick window is auxiliary and closes automatically on focus loss.
+- Windows artifacts require a successful CI build and manual user-side checks for actual proxy connections.

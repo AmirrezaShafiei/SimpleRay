@@ -40,3 +40,6 @@ The six-phase beta is available as a Windows x64 setup with the official Xray-co
 ## Manual verification
 
 Real remote subscriptions and server profiles, interactive tray behavior, Windows sign-in and registry recovery after a forced crash still require hands-on verification. Imported share links and subscription URLs are currently stored in the Windows WebView profile without encryption. See [SPEC.md](SPEC.md) and [ROADMAP.md](ROADMAP.md) for the documented product scope.
+
+## Update — 2026-11-19, 0.5.0-beta.5 candidate
+User requested (1) nonintrusive Suggest popup while in Tray, with manual quick server switch, (2) Ocean/Forest/Violet + Custom color palettes independent of Light/Dark/System brightness, and (3) default Ping All x2 average. Source implemented on feature/tray-suggest-palettes-ping2; tests/quick-palette-ping.test.mjs added. Windows CI and manual Suggest/Quick Switch QA are still required. The previous 0.5.0-beta.4 Windows CI had a successful run; do not confuse earlier failed beta.1 run with current status. Keep existing switch modes Off/Suggest/Automatic. The new popup **does not** automatically change server in Suggest mode.
