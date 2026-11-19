@@ -52,6 +52,7 @@ struct Active {
     download_bps:f64,
     upload_bps:f64,
     traffic_available:bool,
+    system_proxy:bool,
 }
 #[derive(Default)]
 struct EngineRuntime {active:Option<Active>,last_error:Option<String>}
@@ -129,6 +130,8 @@ async fn start_xray(app:&AppHandle,outbound:Value,stats:bool)->Result<StartedXra
         .map_err(|_|"Could not save Xray runtime configuration")?;
     // Core checks generated config before any process is started.
     let mut check=Command::new(&bin);
+    #[cfg(target_os="windows")]
+    check.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     // The official Xray ZIP includes geoip/geosite datasets alongside xray.exe.
     // Point Xray at the bundled resource directory on Windows NSIS installs.
     let assets=bin.parent().ok_or("Cannot locate Xray assets")?;
@@ -141,6 +144,8 @@ async fn start_xray(app:&AppHandle,outbound:Value,stats:bool)->Result<StartedXra
         .map_err(|_|"Unable to execute Xray-core")?;
     if !check.success(){return Err("Xray rejected this profile (protocol or transport configuration)".into())}
     let mut command=Command::new(&bin);
+    #[cfg(target_os="windows")]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     command.env("XRAY_LOCATION_ASSET",assets);
     command.args(["run","-config"]).arg(&config_path)
         .kill_on_drop(true).stdin(std::process::Stdio::null())
@@ -168,7 +173,7 @@ async fn probe_once(port:u16)->Result<u64,String>{
         .build().map_err(|_|"Could not create HTTP probe")?;
     let start=Instant::now();
     let response=client.get(PROBE_URL).header(reqwest::header::CONNECTION,"close").send().await
-        .map_err(|_|"Proxy request failed or timed out")?;
+        .map_err(|error|if error.is_timeout(){"Proxy request timed out"}else{"Proxy request failed"})?;
     if response.status()!=reqwest::StatusCode::NO_CONTENT{
         return Err("Proxy probe did not return HTTP 204".into())
     }
@@ -207,7 +212,7 @@ impl EngineManager {
         let server_id=server_id.clone();
         runtime.active=Some(Active{
             core:new_core,server_id,backup,last_poll:Instant::now(),
-            download_bps:0.,upload_bps:0.,traffic_available:false
+            download_bps:0.,upload_bps:0.,traffic_available:false,system_proxy:true,
         });
         runtime.last_error=None;
         self.snapshot_locked(&runtime)
@@ -226,26 +231,21 @@ impl EngineManager {
     fn snapshot_locked(&self,session:&EngineRuntime)->Result<ConnectionStatus,String>{
         if let Some(active)=&session.active{
             Ok(ConnectionStatus{state:"connected".into(),server_id:Some(active.server_id.clone()),
-                system_proxy:true,download_bps:active.download_bps,upload_bps:active.upload_bps,
-                traffic_available:active.traffic_available,error:None})
+                system_proxy:active.system_proxy,download_bps:active.download_bps,upload_bps:active.upload_bps,
+                traffic_available:active.traffic_available,
+                error:(!active.system_proxy).then(||"Windows System Proxy was changed outside SimpleRay".into())})
         }else{Ok(ConnectionStatus::off(session.last_error.clone()))}
     }
     pub async fn status(&self,app:&AppHandle)->Result<ConnectionStatus,String>{
         let mut runtime=self.runtime.lock().await;
+        Self::reap_core(app,&mut runtime).await;
         if let Some(active)=runtime.active.as_mut(){
-            match active.core.child.try_wait(){
-                Ok(Some(_))|Err(_)=>{
-                    let old=runtime.active.take().expect("active session exists");
-                    let _=system_proxy::restore(app,&old.backup,old.core.proxy_port);
-                    kill(old.core).await;
-                    runtime.last_error=Some("Xray-core exited unexpectedly; System Proxy cleanup attempted".into());
-                    return self.snapshot_locked(&runtime);
-                },
-                Ok(None)=>{}
-            }
             if active.last_poll.elapsed()>=Duration::from_millis(900){
                 let elapsed=active.last_poll.elapsed().as_secs_f64().max(0.001);
                 active.last_poll=Instant::now();
+                if let Ok(enabled)=system_proxy::is_active(active.core.proxy_port) {
+                    active.system_proxy=enabled;
+                }
                 if let Some(api_port)=active.core.api_port{
                     match query_traffic(app,api_port).await{
                         Ok((up,down))=>{
@@ -260,11 +260,33 @@ impl EngineManager {
         }
         self.snapshot_locked(&runtime)
     }
+    async fn reap_core(app:&AppHandle,runtime:&mut EngineRuntime) {
+        if !runtime.active.as_mut().is_some_and(|active| !matches!(active.core.child.try_wait(),Ok(None))) {
+            return;
+        }
+        let old=runtime.active.take().expect("active session exists");
+        let restored=system_proxy::restore(app,&old.backup,old.core.proxy_port).is_ok();
+        kill(old.core).await;
+        runtime.last_error=Some(if restored {
+            "Xray-core exited unexpectedly. Windows System Proxy was released."
+        } else {
+            "Xray-core exited and Windows System Proxy could not be restored. Restart SimpleRay to retry."
+        }.into());
+    }
+    pub async fn monitor_core(&self,app:&AppHandle) {
+        loop {
+            sleep(Duration::from_secs(1)).await;
+            let mut runtime=self.runtime.lock().await;
+            Self::reap_core(app,&mut runtime).await;
+        }
+    }
     pub async fn shutdown(&self,app:&AppHandle){let _=self.disconnect(app).await;}
 }
 async fn query_traffic(app:&AppHandle,port:u16)->Result<(u64,u64),String>{
     let xray=locate_xray(app)?;
     let mut command=Command::new(xray);
+    #[cfg(target_os="windows")]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     command.arg("api").arg("statsquery")
         .arg(format!("--server=127.0.0.1:{port}"))
         .arg("--pattern=inbound>>>proxy-in>>>traffic")
@@ -292,7 +314,11 @@ pub async fn ping_server(app:&AppHandle,outbound:Value,samples:u8)->Result<Laten
     for _ in 0..samples{
         match probe_once(core.proxy_port).await{
             Ok(ms)=>values.push(ms),
-            Err(e)=>reason=Some(e),
+            Err(e)=>{
+                if reason.is_none()||!e.contains("timed out") {
+                    reason=Some(e);
+                }
+            }
         }
     }
     kill(core).await;

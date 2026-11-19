@@ -74,7 +74,15 @@ fn show_main_window(app:AppHandle)->Result<(),String>{
 }
 #[cfg_attr(mobile,tauri::mobile_entry_point)]
 pub fn run(){
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os="windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        if !args.iter().any(|arg| arg == "--minimized") {
+            tray::show_main(app);
+        }
+    }));
+
+    builder
         .manage(EngineManager::default())
         .manage(ExitGuard::default())
         .setup(|app|{
@@ -85,9 +93,12 @@ pub fn run(){
             }
             app.manage(DesktopSettings::new(app.handle()));
             tray::setup(app)?;
-            // Login startup must create the tray without flashing a main window.
-            if std::env::args().any(|arg|arg=="--minimized") {
-                if let Some(main)=app.get_webview_window("main") {let _=main.hide();}
+            let handle=app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                handle.state::<EngineManager>().monitor_core(&handle).await;
+            });
+            if !std::env::args().any(|arg|arg=="--minimized") {
+                tray::show_main(app.handle());
             }
             Ok(())
         })

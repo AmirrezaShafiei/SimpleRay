@@ -25,6 +25,12 @@ test('Ping all caps parallelism at three and saves completion per node',async()=
   assert.equal(summary.finished,8);assert.equal(seen.length,8);assert.equal(maxConcurrent,3);
   assert.deepEqual(seen.at(-1).result,{latency:87,latencyStatus:'ok',latencySuccess:3,latencyAttempted:3});
 });
+test('failed proxy probes and missing averages never appear as a measured zero',()=>{
+  assert.deepEqual(normalizedLatencyResult({averageMs:null,successful:0,attempted:1,reason:'Proxy request failed'},1),{
+    latency:null,latencyStatus:'error',latencySuccess:0,latencyAttempted:1
+  });
+  assert.equal(normalizedLatencyResult({averageMs:null,successful:1,attempted:1},1).latency,null);
+});
 test('Ping All supports a single sample and cancels queued nodes',async()=>{
   const seen=[];let cancelled=false;
   const summary=await pingPool([{id:'a'},{id:'b'},{id:'c'}],1,async()=>({averageMs:80,successful:1,attempted:1}),server=>{

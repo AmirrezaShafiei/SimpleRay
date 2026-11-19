@@ -21,5 +21,6 @@ test('system proxy recovery snapshot and restoration, scoped to user registry',(
   assert.match(proxy,/proxy-recovery\.json/);
   assert.match(proxy,/original_server/);
   assert.match(proxy,/previous_port/);
-  assert.match(proxy,/current_matches/);
+  assert.match(proxy,/persist_noclobber/);
+  assert.match(proxy,/is_active/);
 });

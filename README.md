@@ -2,7 +2,7 @@
 
 Single-window, no-sidebar V2Ray/Xray client with Dark/Light/System themes, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
 
-> **Status:** Version `0.5.0-beta.1` **source candidate** for Phases 1–6. **51/51 local Node tests passed.** Native Windows integration, real-server connections and installer are only verified after GitHub Actions/Windows tests succeed. Do not assume a completed installer from this README alone.
+> **Status:** Version `0.5.0-beta.2` covers Phases 1–6. The Windows x64 installer and its SHA-256 checksum are attached to the private beta release after the Windows build and installation smoke test pass.
 
 ## Features in source
 - Clipboard import of VMess, VLESS, Trojan, Shadowsocks, plus manually named subscriptions and update/rename/delete.
@@ -14,8 +14,8 @@ Single-window, no-sidebar V2Ray/Xray client with Dark/Light/System themes, compa
 - Consistent Dark/Light/System themes and a small gear Settings panel.
 
 ## Test source locally
-- `npm install` — fetch Tauri CLI build dependencies
-- `npm test` — Node unit/static tests (51/51 in current runner).
+- `npm ci` — install locked Tauri CLI build dependencies
+- `npm test` — run Node unit and static checks.
 - `npm run build` — checks source/JS syntax **ONLY**, not native code.
 - `npm run dev` — browser UI preview **without native connections**.
 - `npm run desktop:dev` — requires Windows, Rust/Cargo, MSVC, WebView2, verified official Xray binary staged in `src-tauri/binaries/`.
@@ -24,8 +24,8 @@ Single-window, no-sidebar V2Ray/Xray client with Dark/Light/System themes, compa
 For manual Xray staging, use `scripts/stage-xray.ps1` with a separately trusted 64-character SHA256. CI pins official Xray-core v26.11.9.
 
 ## Windows beta pipeline
-- [.github/workflows/windows-beta.yml](.github/workflows/windows-beta.yml) builds on Windows 2022 and verifies official Xray ZIP SHA256, Xray API fixture, Node/Rust tests, NSIS package, and then uploads the installer; only successful CI publishes an **unsigned** GitHub prerelease.
-- [GitHub Actions run](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44382246461) and [Releases](https://github.com/AmirrezaShafiei/SimpleRay/releases) are the sources of truth about installer availability.
+- [.github/workflows/windows-beta.yml](.github/workflows/windows-beta.yml) checks the official Xray ZIP SHA-256, validates the Xray fixture, runs JS and Rust tests, builds NSIS, and smoke-tests installation and single-instance startup.
+- The workflow publishes the unsigned setup and checksum directly to [Releases](https://github.com/AmirrezaShafiei/SimpleRay/releases). The preceding beta build produced an installer but could not upload it to Actions artifact storage because its quota was exhausted.
 
 ## Security and limits
 **Sensitive share URIs and subscription URLs are currently stored as plaintext local WebView data. Use only on a trusted Windows user profile. Encrypted OS-backed storage is required before wide public distribution.** This beta has no TUN, split tunnel or browser extension. The NSIS installer is not digitally signed.

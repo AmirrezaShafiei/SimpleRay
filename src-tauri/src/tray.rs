@@ -7,7 +7,7 @@ use crate::{engine::EngineManager,preferences::DesktopSettings};
 #[derive(Default)]
 pub struct ExitGuard(pub AtomicBool);
 
-fn show_main(app:&AppHandle) {
+pub fn show_main(app:&AppHandle) {
     if let Some(window)=app.get_webview_window("main") {
         let _=window.show();
         let _=window.unminimize();

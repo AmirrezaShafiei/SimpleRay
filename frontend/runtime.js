@@ -9,8 +9,11 @@ export function bytesPerSecond(value){
 export function normalizedLatencyResult(result,samples){
   const attempted=Number(result?.attempted)||samples;
   const successful=Number(result?.successful)||0;
-  const average=Number(result?.averageMs);
-  if(!successful||!Number.isFinite(average)||average<0)return {latency:null,latencyStatus:'timeout',latencySuccess:0,latencyAttempted:attempted};
+  const average=result?.averageMs;
+  if(!successful||!Number.isFinite(average)||average<0){
+    const timedOut=!result?.reason||/timed out/i.test(result.reason);
+    return {latency:null,latencyStatus:timedOut?'timeout':'error',latencySuccess:0,latencyAttempted:attempted};
+  }
   return {latency:Math.round(average),latencyStatus:successful<attempted?'partial':'ok',latencySuccess:successful,latencyAttempted:attempted};
 }
 export async function pingPool(servers,samples,runOne,onProgress,{concurrency=3,shouldStop=()=>false}={}){

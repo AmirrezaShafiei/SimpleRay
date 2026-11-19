@@ -1,11 +1,11 @@
 //! User-scoped desktop preferences and Windows auto-start (no administrator privileges).
 //! Keeps the shell's close-to-tray behavior available while the webview is hidden.
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, sync::RwLock};
+use std::{fs, io::Write, path::PathBuf, sync::RwLock};
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct DesktopPreferences {
     pub minimize_to_tray: bool,
     pub auto_connect: bool,
@@ -27,13 +27,14 @@ impl DesktopSettings {
     }
     pub fn set(&self, app: &AppHandle, prefs: DesktopPreferences) -> Result<DesktopPreferences,String> {
         let p=settings_path(app)?;
+        let mut current=self.current.write().map_err(|_|"Settings lock unavailable")?;
         let bytes=serde_json::to_vec(&prefs).map_err(|_|"Cannot encode preferences")?;
-        let tmp=p.with_extension("json.tmp");
-        fs::write(&tmp,bytes).map_err(|_|"Cannot save desktop settings")?;
-        // On Windows rename fails if the target exists. Preserve old settings if replacement fails.
-        if p.exists() { fs::remove_file(&p).map_err(|_|"Cannot replace desktop settings")?; }
-        fs::rename(&tmp,&p).map_err(|_|"Cannot finish saving desktop settings")?;
-        *self.current.write().map_err(|_|"Settings lock unavailable")?=prefs.clone();
+        let mut tmp=tempfile::NamedTempFile::new_in(p.parent().ok_or("Settings directory unavailable")?)
+            .map_err(|_|"Cannot prepare desktop settings")?;
+        tmp.write_all(&bytes).and_then(|_|tmp.as_file().sync_all())
+            .map_err(|_|"Cannot save desktop settings")?;
+        tmp.persist(&p).map_err(|_|"Cannot finish saving desktop settings")?;
+        *current=prefs.clone();
         Ok(prefs)
     }
 }
@@ -45,7 +46,6 @@ fn settings_path(app:&AppHandle)->Result<PathBuf,String>{
 
 #[cfg(target_os="windows")]
 mod windows_startup {
-    use super::*;
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     const REG_PATH:&str=r"Software\Microsoft\Windows\CurrentVersion\Run";
     const VALUE:&str="SimpleRay";

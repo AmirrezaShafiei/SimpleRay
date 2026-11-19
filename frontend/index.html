@@ -45,6 +45,7 @@
       <label class="field-label" for="manualUri">Share link</label><textarea id="manualUri" spellcheck="false" rows="4" placeholder="vless://… or vmess://…"></textarea>
       <label class="field-label" for="manualName">Display name (optional)</label><input id="manualName" autocomplete="off" placeholder="From share link if blank" maxlength="160" />
       <p class="field-hint">Sensitive configuration data is saved locally on this computer.</p>
+      <p class="form-error" id="manualError" role="alert"></p>
       <div class="dialog-buttons"><button type="button" class="dialog-action secondary" data-close="manualDialog">Cancel</button><button type="submit" class="dialog-action primary">Save</button></div>
     </form>
   </dialog>
@@ -54,6 +55,7 @@
       <label class="field-label" for="subscriptionName">Subscription name</label><input id="subscriptionName" required maxlength="160" autocomplete="off" placeholder="e.g. Daily Nodes" />
       <label class="field-label" for="subscriptionUrl">Subscription URL</label><input id="subscriptionUrl" required type="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/subscription" />
       <p class="field-hint">Every imported server will display this name in its Source column.</p>
+      <p class="form-error" id="subscriptionError" role="alert"></p>
       <div class="dialog-buttons"><button type="button" class="dialog-action secondary" data-close="subscriptionDialog">Cancel</button><button type="submit" class="dialog-action primary">Save & Update</button></div>
     </form>
   </dialog>

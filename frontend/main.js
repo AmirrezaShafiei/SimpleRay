@@ -13,6 +13,8 @@ const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
 let toastTimeout;
+let connectionPoll;
+let connectionRevision=0;
 function renderDesktopSettings(){
   for (const [id,checked] of [['trayToggle',desktop.minimizeToTray],['autoConnectToggle',desktop.autoConnect],['startupToggle',desktop.startup]]){
     const input=$(id);input.checked=Boolean(checked);input.disabled=!nativeHost()||desktop.loading;
@@ -22,14 +24,18 @@ function renderDesktopSettings(){
 }
 async function readDesktopSettings(){
   renderDesktopSettings();if(!nativeHost())return;
-  try{
-    const [settings,startup]=await Promise.all([nativeInvoke('get_desktop_settings'),nativeInvoke('get_autostart_enabled')]);
-    desktop.minimizeToTray=Boolean(settings.minimizeToTray);
-    desktop.autoConnect=Boolean(settings.autoConnect);
-    desktop.startup=Boolean(startup);
-    renderDesktopSettings();
-    if(desktop.autoConnect&&state.selected&&state.connection.state!=='connected')await connectSelected();
-  }catch(err){toast(errorMessage(err))}
+  desktop.loading=true;
+  renderDesktopSettings();
+  const [settings,startup]=await Promise.allSettled([nativeInvoke('get_desktop_settings'),nativeInvoke('get_autostart_enabled')]);
+  if(settings.status==='fulfilled'){
+    desktop.minimizeToTray=Boolean(settings.value.minimizeToTray);
+    desktop.autoConnect=Boolean(settings.value.autoConnect);
+  }else toast(errorMessage(settings.reason));
+  if(startup.status==='fulfilled')desktop.startup=Boolean(startup.value);
+  else toast(errorMessage(startup.reason));
+  desktop.loading=false;
+  renderDesktopSettings();
+  if(desktop.autoConnect&&state.selected&&state.connection.state!=='connected')await connectSelected();
 }
 async function changeDesktopSetting(field,value){
   if(!nativeHost())return;
@@ -52,7 +58,18 @@ function resolvedTheme(){return state.theme==='system'?(window.matchMedia?.('(pr
 function applyTheme(){document.documentElement.dataset.theme=resolvedTheme();$('themeSelect').value=state.theme}
 function sync(){const db=repo.snapshot();state.servers=repo.rows();state.selected=db.selectedId;render();renderSubscriptionList()}
 function getSelected(){return state.servers.find(s=>s.id===state.selected)||null}
-function setSelected(id){if(safeAction(()=>repo.setSelected(id)))sync()}
+function serverRow(id){return $('serverRows').querySelector(`[data-id="${CSS.escape(String(id))}"]`)}
+function setSelected(id){
+  if(id===state.selected||!safeAction(()=>repo.setSelected(id)))return;
+  const previous=serverRow(state.selected);
+  previous?.classList.remove('selected');
+  previous?.setAttribute('aria-selected','false');
+  state.selected=id;
+  const selected=serverRow(id);
+  selected?.classList.add('selected');
+  selected?.setAttribute('aria-selected','true');
+  renderConnection();
+}
 function nativeHost(){return Boolean(window.__TAURI_INTERNALS__?.invoke)}
 function renderConnection(){
   const c=state.connection;
@@ -63,8 +80,9 @@ function renderConnection(){
   $('connectionSwitch').disabled=Boolean(disabled);
   $('connectionSwitch').setAttribute('aria-checked',String(connected));
   $('connectionSwitch').setAttribute('aria-label',connected?'Disconnect':'Connect');
-  $('connectionState').textContent=state.connectionBusy?'Connecting…':connected?'Connected':'Disconnected';
-  $('stateLed').title=connected?'Verified through Xray local proxy':state.connectionBusy?'Connecting':'Disconnected';
+  const status=state.connectionBusy|| (connected?'Connected':'Disconnected');
+  $('connectionState').textContent=status;
+  $('stateLed').title=state.connectionBusy||(connected?'Verified through Xray local proxy':'Disconnected');
   $('selectedFlag').textContent=server?.flag||'🌐';
   $('selectedText').textContent=server?`${server.name} · ${server.type}`:connected?'Current connection':'No server selected';
   $('selectedLatency').textContent=typeof server?.latency==='number'?`${server.latency} ms`:'—';
@@ -74,18 +92,23 @@ function renderConnection(){
   $('upRate').textContent=c.trafficAvailable?bytesPerSecond(c.uploadBps):'—';
   $('connectionSwitch').closest('.connection-panel').classList.toggle('no-servers',!server);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected);
-  $('connectionSwitch').closest('.connection-panel').classList.toggle('connecting',state.connectionBusy);
-  $('footerConnection').lastChild.textContent=connected?' Connected · System Proxy':state.connectionBusy?' Connecting…':' Disconnected';
+  $('connectionSwitch').closest('.connection-panel').classList.toggle('connecting',Boolean(state.connectionBusy));
+  $('footerConnection').lastChild.textContent=connected&&!state.connectionBusy&&c.systemProxy?' Connected · System Proxy':` ${status}`;
   $('systemProxyStatus').textContent=c.systemProxy?'Active':'Inactive';
 }
 async function refreshConnectionStatus({silent=false}={}){
-  if(!nativeHost()||state.connectionBusy)return;
+  if(!nativeHost()||state.connectionBusy||connectionPoll)return;
+  const revision=connectionRevision;
   try{
+    connectionPoll=nativeInvoke('connection_status');
+    const current=await connectionPoll;
+    if(revision!==connectionRevision)return;
     const previous=state.connection;
-    state.connection=await nativeInvoke('connection_status');
-    if(!silent&&state.connection.error&&state.connection.error!==previous.error)toast(state.connection.error);
+    state.connection=current;
+    if(state.connection.error&&state.connection.error!==previous.error)toast(state.connection.error);
     renderConnection();
-  }catch(err){if(!silent)toast(errorMessage(err));}
+  }catch(err){if(!silent&&revision===connectionRevision)toast(errorMessage(err));}
+  finally{connectionPoll=null}
 }
 async function connectSelected(id=state.selected){
   if(!nativeHost()){toast('Connections require the native Windows desktop app');return}
@@ -93,7 +116,8 @@ async function connectSelected(id=state.selected){
   if(!server){toast('Select a server before connecting');return}
   if(state.connectionBusy)return;
   if(state.connection.state==='connected'&&state.connection.serverId===id)return;
-  state.connectionBusy=true;renderConnection();
+  connectionRevision++;
+  state.connectionBusy=state.connection.state==='connected'?'Switching…':'Connecting…';renderConnection();
   try{
     const outbound=outboundFromShareLink(server.uri);
     state.connection=await nativeInvoke('connect_server',{serverId:id,outbound});
@@ -103,10 +127,11 @@ async function connectSelected(id=state.selected){
 }
 async function disconnectConnection(){
   if(!nativeHost()||state.connectionBusy)return;
-  state.connectionBusy=true;renderConnection();
+  connectionRevision++;
+  state.connectionBusy='Disconnecting…';renderConnection();
   try{state.connection=await nativeInvoke('disconnect_server');toast('Disconnected');}
-  catch(err){toast(errorMessage(err));await refreshConnectionStatus({silent:true})}
-  finally{state.connectionBusy=false;renderConnection()}
+  catch(err){toast(errorMessage(err))}
+  finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
 async function toggleConnection(){
   if(state.connection.state==='connected')await disconnectConnection();
@@ -114,7 +139,7 @@ async function toggleConnection(){
 }
 async function pingServers(servers,samples){
   if(!nativeHost()){toast('Real latency testing requires the native app and Xray-core');return}
-  if(state.pingBusy){state.pingAbort=true;toast('Cancelling queued tests; active probes will finish');return}
+  if(state.pingBusy){toast('A latency test is already running');return}
   if(!servers.length){toast('No configurations to test');return}
   state.pingBusy=true;state.pingAbort=false;
   const button=$('pingAllButton');
@@ -124,8 +149,11 @@ async function pingServers(servers,samples){
       async server=>nativeInvoke('measure_server_latency',{outbound:outboundFromShareLink(server.uri),samples}),
       (server,result,done,total)=>{
         // A subscription refresh may have removed this entry while probing.
-        if(state.servers.some(s=>s.id===server.id))safeAction(()=>repo.setLatency(server.id,result));
-        sync();
+        if(state.servers.some(s=>s.id===server.id&&s.signature===server.signature)){
+          safeAction(()=>repo.setLatency(server.id,result));
+          state.servers=repo.rows();
+          render();
+        }
         $('runtimeNotice').textContent=`Latency tested: ${done}/${total} · ${samples} probe${samples===1?'':'s'} per server`;
       },{concurrency:3,shouldStop:()=>state.pingAbort});
     toast(`Real-delay tests ${summary.cancelled?'cancelled':'completed'}: ${summary.finished}/${summary.total}`);
@@ -135,7 +163,7 @@ async function pingServers(servers,samples){
 
 function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').textContent=active?(state.sortDirection==='asc'?'↑':'↓'):'↕';btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
 function orderedRows(){const rows=filterServers(state.servers,state.query);return state.sortKey?sortServers(rows,state.sortKey,state.sortDirection):rows}
-function renderTable(){const rows=orderedRows(),body=$('serverRows');body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
+function renderTable(){const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
     const starCell=tr.insertCell();const star=document.createElement('button');star.className='star'+(s.favorite?' is-favorite':'');star.textContent=s.favorite?'★':'☆';star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);star.addEventListener('click',e=>{e.stopPropagation();toggleFavorite(s.id)});starCell.append(star);
     const nameCell=tr.insertCell();const wrap=document.createElement('div');wrap.className='name-cell';const flag=document.createElement('span');flag.className='flag';flag.textContent=s.flag||'🌐';const name=document.createElement('span');name.className='server-name';name.textContent=s.name;wrap.append(flag,name);nameCell.append(wrap);
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
@@ -143,7 +171,8 @@ function renderTable(){const rows=orderedRows(),body=$('serverRows');body.replac
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
     tr.addEventListener('click',()=>setSelected(s.id));tr.addEventListener('dblclick',()=>{setSelected(s.id);void connectSelected(s.id)});
     tr.addEventListener('contextmenu',e=>{e.preventDefault();setSelected(s.id);showContextMenu(s.id,e.clientX,e.clientY)});
-    tr.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();setSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();setSelected(s.id);const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
+    tr.addEventListener('keydown',e=>{if(e.target!==tr)return;if(e.key==='Enter'){e.preventDefault();setSelected(s.id);void connectSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();setSelected(s.id);const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
+  if(focusedId){const row=serverRow(focusedId);const control=focused.matches('.star')?row?.querySelector('.star'):row;control?.focus({preventScroll:true})}
   $('emptyMessage').hidden=rows.length!==0;$('sampleCount').textContent=`${rows.length} of ${state.servers.length} configurations`;renderSort();renderConnection()}
 function render(){renderTable()}
 function toggleFavorite(id){if(safeAction(()=>repo.toggleFavorite(id)))sync()}
@@ -154,13 +183,24 @@ function closePasteMenu(){$('pasteMenu').hidden=true;$('pasteMenuButton').setAtt
 function showDialog(id){const target=$(id);for(const dialog of document.querySelectorAll('dialog[open]')){if(dialog!==target)dialog.close()}if(!target.open)target.showModal()}
 function confirmAction(title,description,acceptLabel='Delete',keepLabel=null){return new Promise(resolve=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmDescription').textContent=description;$('confirmAccept').textContent=acceptLabel;$('confirmKeep').hidden=!keepLabel;if(keepLabel)$('confirmKeep').textContent=keepLabel;let done=false;const finish=result=>{if(done)return;done=true;dialog.close();dialog.removeEventListener('close',cancel);$('confirmCancel').removeEventListener('click',onCancel);$('confirmClose').removeEventListener('click',onCancel);$('confirmAccept').removeEventListener('click',onYes);$('confirmKeep').removeEventListener('click',onKeep);resolve(result)};const cancel=()=>finish(false),onCancel=()=>finish(false),onYes=()=>finish(true),onKeep=()=>finish('keep');dialog.addEventListener('close',cancel);$('confirmCancel').addEventListener('click',onCancel);$('confirmClose').addEventListener('click',onCancel);$('confirmAccept').addEventListener('click',onYes);$('confirmKeep').addEventListener('click',onKeep);showDialog('confirmDialog')})}
 async function removeServer(id){const s=state.servers.find(x=>x.id===id);if(!s)return;const answer=await confirmAction('Delete configuration?',s.subscriptionId?'This node will be hidden on future subscription updates.':'This manual configuration will be removed from local storage.');if(!answer)return;if(state.connection.state==='connected'&&state.connection.serverId===id){await disconnectConnection();if(state.connection.state==='connected')return}if(safeAction(()=>repo.deleteServer(id)))sync()}
-function openManualDialog(id=null){closePasteMenu();state.editingId=id;const s=state.servers.find(x=>x.id===id);$('manualDialogTitle').textContent=s?'Edit configuration':'Add server';$('manualUri').value=s?.uri||'';$('manualName').value=s?.name||'';showDialog('manualDialog');$('manualUri').focus()}
-function openSubscriptionDialog(url=''){closePasteMenu();$('subscriptionName').value='';$('subscriptionUrl').value=url;showDialog('subscriptionDialog');$('subscriptionName').focus()}
+function openManualDialog(id=null){closePasteMenu();$('manualError').textContent='';state.editingId=id;const s=state.servers.find(x=>x.id===id);$('manualDialogTitle').textContent=s?'Edit configuration':'Add server';$('manualUri').value=s?.uri||'';$('manualName').value=s?.name||'';showDialog('manualDialog');$('manualUri').focus()}
+function openSubscriptionDialog(url=''){closePasteMenu();$('subscriptionError').textContent='';$('subscriptionName').value='';$('subscriptionUrl').value=url;showDialog('subscriptionDialog');$('subscriptionName').focus()}
 function openManager(){closePasteMenu();renderSubscriptionList();showDialog('manageDialog')}
 function sourceName(sub){return sub.name}
 function renderSubscriptionList(){const list=$('subscriptionList');list.replaceChildren();const subscriptions=repo.snapshot().subscriptions;if(!subscriptions.length){const text=document.createElement('p');text.className='manager-empty';text.textContent='No subscriptions yet. Add one by name and URL.';list.append(text);return}for(const sub of subscriptions){const item=document.createElement('div');item.className='subscription-card';const meta=document.createElement('div');meta.className='subscription-meta';const title=document.createElement('strong');title.textContent=sourceName(sub);const info=document.createElement('p');info.textContent=`${state.servers.filter(s=>s.subscriptionId===sub.id).length} servers · ${sub.updatedAt?new Date(sub.updatedAt).toLocaleString():'Not updated yet'}`;meta.append(title,info);if(sub.lastError){const error=document.createElement('p');error.className='sub-error';error.textContent=sub.lastError;meta.append(error)}const controls=document.createElement('div');controls.className='subscription-actions';for(const [text,action,cls] of [['Update',()=>updateSubscription(sub.id),''],['Rename',()=>renameSubscription(item,sub),''],['Delete',()=>removeSubscription(sub.id),'delete-sub']]){const b=document.createElement('button');b.textContent=text;b.className=cls;b.disabled=state.updating;b.addEventListener('click',action);controls.append(b)}item.append(meta,controls);list.append(item)}}
 function renameSubscription(item,sub){const meta=item.querySelector('.subscription-meta');meta.replaceChildren();const input=document.createElement('input');input.value=sub.name;input.maxLength=160;input.setAttribute('aria-label','New subscription name');meta.append(input);const controls=item.querySelector('.subscription-actions');controls.replaceChildren();const save=document.createElement('button');save.textContent='Save';save.addEventListener('click',()=>{if(safeAction(()=>repo.renameSubscription(sub.id,input.value)))sync()});const cancel=document.createElement('button');cancel.textContent='Cancel';cancel.addEventListener('click',renderSubscriptionList);controls.append(save,cancel);input.focus();input.select();input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();save.click()}else if(e.key==='Escape'){e.preventDefault();renderSubscriptionList()}})}
-async function removeSubscription(id){const sub=repo.snapshot().subscriptions.find(x=>x.id===id);if(!sub)return;const choice=await confirmAction('Delete subscription?',`Remove “${sub.name}”. Keep its imported servers as standalone configurations, or delete them too?`, 'Delete all', 'Keep servers');if(!choice)return;if(safeAction(()=>repo.deleteSubscription(id,{keepNodes:choice==='keep'})))sync()}
+async function removeSubscription(id){
+  const sub=repo.snapshot().subscriptions.find(x=>x.id===id);
+  if(!sub)return;
+  const choice=await confirmAction('Delete subscription?',`Remove “${sub.name}”. Keep its imported servers as standalone configurations, or delete them too?`, 'Delete all', 'Keep servers');
+  if(!choice)return;
+  const active=state.servers.find(server=>server.id===state.connection.serverId);
+  if(choice!=='keep'&&active?.subscriptionId===id){
+    await disconnectConnection();
+    if(state.connection.state==='connected')return;
+  }
+  if(safeAction(()=>repo.deleteSubscription(id,{keepNodes:choice==='keep'})))sync();
+}
 async function nativeInvoke(command,args){if(!window.__TAURI_INTERNALS__?.invoke)throw new Error('Native commands are available only in the installed desktop app');return window.__TAURI_INTERNALS__.invoke(command,args)}
 async function readClipboardText(){if(window.__TAURI_INTERNALS__?.invoke)return nativeInvoke('read_clipboard_text');if(navigator.clipboard?.readText)return navigator.clipboard.readText();throw new Error('Clipboard API unavailable; use Paste menu → Add manual configuration')}
 async function fetchSubscription(url){if(window.__TAURI_INTERNALS__?.invoke)return nativeInvoke('fetch_subscription_text',{url});
@@ -173,7 +213,7 @@ async function updateSubscription(id){const sub=repo.snapshot().subscriptions.fi
   catch(e){const reason=errorMessage(e);safeAction(()=>repo.setSubscriptionError(id,reason));toast(`${sub.name}: ${reason}`);return null}
   finally{state.updating=false;sync()}}
 async function updateAll(){const subscriptions=repo.snapshot().subscriptions;if(!subscriptions.length){toast('No subscriptions to update. Add a subscription first.');return}if(state.updating)return;let ok=0;for(const sub of subscriptions){const result=await updateSubscription(sub.id);if(result)ok++}toast(`Subscription update complete: ${ok}/${subscriptions.length} succeeded`)}
-async function submitSubscription(){const name=$('subscriptionName').value,url=$('subscriptionUrl').value;let created;try{created=repo.addSubscription(name,url)}catch(e){toast(errorMessage(e));return}sync();$('subscriptionDialog').close();await updateSubscription(created.id);if(state.pendingSubscriptionUrls.length)openSubscriptionDialog(state.pendingSubscriptionUrls.shift())}
+async function submitSubscription(){const name=$('subscriptionName').value,url=$('subscriptionUrl').value;let created;try{created=repo.addSubscription(name,url)}catch(e){$('subscriptionError').textContent=errorMessage(e);return}sync();$('subscriptionDialog').close();await updateSubscription(created.id);if(state.pendingSubscriptionUrls.length)openSubscriptionDialog(state.pendingSubscriptionUrls.shift())}
 async function importClipboard(){let text;try{text=await readClipboardText()}catch(e){toast(errorMessage(e));openManualDialog();return}if(!text?.trim()){toast('Clipboard is empty');return}
   const before=repo.rows().length;let result;try{result=repo.importManual(text)}catch(e){toast(errorMessage(e));return}sync();if(result.servers.length)toast(`Added ${repo.rows().length-before} new configuration(s)${result.errors.length?`; ${result.errors.length} unsupported/invalid`:''}`);else if(result.errors.length)toast(`Could not import: ${result.errors[0].reason}`);
   if(result.subscriptionUrls.length){state.pendingSubscriptionUrls=result.subscriptionUrls.slice(1);openSubscriptionDialog(result.subscriptionUrls[0])}
@@ -186,7 +226,7 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'?'desc':'asc'}render()}));
   $('searchInput').addEventListener('input',e=>{state.query=e.target.value;render()});
   $('connectionSwitch').addEventListener('click',()=>void toggleConnection());
-  $('selectedServer').addEventListener('click',()=>{const row=document.querySelector(`tr[data-id="${state.selected}"]`);row?.scrollIntoView({block:'nearest',behavior:'smooth'});row?.focus()});
+  $('selectedServer').addEventListener('click',()=>{const row=serverRow(state.selected);row?.scrollIntoView({block:'nearest',behavior:'smooth'});row?.focus()});
   $('pasteButton').addEventListener('click',importClipboard);
   $('pasteMenuButton').addEventListener('click',()=>{const menu=$('pasteMenu');menu.hidden=!menu.hidden;$('pasteMenuButton').setAttribute('aria-expanded',String(!menu.hidden))});
   $('manualAddButton').addEventListener('click',()=>openManualDialog());
@@ -194,10 +234,13 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   $('subscriptionManageButton').addEventListener('click',openManager);
   $('settingsSubscriptions').addEventListener('click',openManager);
   $('managerAddButton').addEventListener('click',()=>openSubscriptionDialog());
-  $('manualForm').addEventListener('submit',e=>{e.preventDefault();const uri=$('manualUri').value,name=$('manualName').value;try{if(state.editingId)repo.updateManual(state.editingId,uri,name);else repo.addManual({uri,name});$('manualDialog').close();sync();toast('Configuration saved locally')}catch(err){toast(errorMessage(err))}});
+  $('manualForm').addEventListener('submit',e=>{e.preventDefault();const uri=$('manualUri').value,name=$('manualName').value;try{if(state.editingId)repo.updateManual(state.editingId,uri,name);else repo.addManual({uri,name});$('manualDialog').close();sync();toast('Configuration saved locally')}catch(err){$('manualError').textContent=errorMessage(err)}});
   $('subscriptionForm').addEventListener('submit',e=>{e.preventDefault();void submitSubscription()});
   $('updateButton').addEventListener('click',()=>void updateAll());
-  $('pingAllButton').addEventListener('click',()=>void pingServers(state.servers,state.pingSamples));
+  $('pingAllButton').addEventListener('click',()=>{
+    if(state.pingBusy){state.pingAbort=true;toast('Cancelling queued tests; active probes will finish')}
+    else void pingServers(state.servers,state.pingSamples);
+  });
   $('settingsButton').addEventListener('click',()=>showDialog('settingsDialog'));
   $('startupToggle').addEventListener('change',e=>void changeDesktopSetting('startup',e.target.checked));
   $('trayToggle').addEventListener('change',e=>void changeDesktopSetting('minimizeToTray',e.target.checked));

@@ -58,11 +58,12 @@ test('Phase 6: bundled executable and geo assets plus license are required',()=>
 test('Phase 6: Windows CI tests both JS and Rust, pins official Xray digest, publishes only after successful build',()=>{
   assert.match(pipeline,/windows-2022/);
   assert.match(pipeline,/npm test/);
-  assert.match(pipeline,/cargo test --manifest-path/);
+  assert.match(pipeline,/cargo test --locked --manifest-path/);
   assert.match(pipeline,/1262522266337b824f07beb8e1375786b437683b3890105469088f8e17e0a69d/);
   assert.match(pipeline,/Get-FileHash/);
   assert.match(pipeline,/npm run desktop:build/);
-  assert.match(pipeline,/actions\/upload-artifact@v4/);
+  assert.match(pipeline,/Verify installation and application startup/);
+  assert.match(pipeline,/gh release create/);
   assert.match(pipeline,/--prerelease/);
 });
 test('Phase 6: source layout remains minimalist and has no fake live data when disconnected',()=>{

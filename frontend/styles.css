@@ -47,3 +47,5 @@
 .setting-line input[type=checkbox]:checked{background:#137bce;border-color:#399dfd;}
 .setting-line input[type=checkbox]:checked::before{transform:translateX(18px)}
 .setting-line input[type=checkbox]:disabled{opacity:.45;cursor:not-allowed;}
+
+.form-error{color:var(--red);font-size:13px;margin:12px 0 0}.form-error:empty{margin:0}
