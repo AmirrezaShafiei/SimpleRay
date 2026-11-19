@@ -17,7 +17,7 @@ const switching={
 };
 let lastSwitchConfig;
 let configUpdate=Promise.resolve();
-const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:THEME_MODES.includes(pref.theme)?pref.theme:'system',themePrimary:themeColor(pref.themePrimary,THEME_COLORS.primary),themeAccent:themeColor(pref.themeAccent,THEME_COLORS.accent),pingSamples:pref.pingSamples===1?1:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:THEME_MODES.includes(pref.theme)?pref.theme:'system',themePrimary:themeColor(pref.themePrimary,THEME_COLORS.primary),themeAccent:themeColor(pref.themeAccent,THEME_COLORS.accent),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -25,6 +25,7 @@ let toastTimeout;
 let connectionPoll;
 let connectionRevision=0;
 let activePing;
+const firstPingResults=new Map();
 
 
 function icon(name){
@@ -190,7 +191,7 @@ function renderConnection(){
   $('stateLed').classList.toggle('proxy-off',connected&&(!c.systemProxy||unhealthy));
   renderFlag($('selectedFlag'),server,icon('globe'));
   $('selectedText').textContent=server?`${displayServerName(server)} · ${server.type}`:session?'Current connection':'No server selected';
-  const ms=session?(health?.attempts?health.latencyMs:c.initialLatencyMs):server?.latency;
+  const ms=session?(health?.attempts?health.latencyMs:c.initialLatencyMs):latencyView(server)?.latency;
   const pinging=connected&&activePing?.revision===connectionRevision;
   const failed=session&&health?.attempts&&!Number.isFinite(ms);
   $('latencyLabel').textContent=session?'Live latency':'Latency';
@@ -338,6 +339,25 @@ async function respondToSwitch(undo){
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
 
+function latencyView(server) {
+  if(!server)return null;
+  const first=firstPingResults.get(server.id);
+  return first?.signature===server.signature&&first ? {...server,...first,provisional:true} : server;
+}
+
+async function measureLatency(server,samples,onFirst) {
+  const outbound=outboundFromShareLink(server.uri);
+  const ipc=window.__TAURI_INTERNALS__;
+  if(samples===1||!ipc.transformCallback)return nativeInvoke('measure_server_latency',{outbound,samples});
+  const callback=ipc.transformCallback(({message})=>{
+    if(message)onFirst(normalizedLatencyResult(message,1));
+  });
+  try {
+    return await nativeInvoke('measure_server_latency',{outbound,samples,onFirst:`__CHANNEL__:${callback}`});
+  } finally {
+    ipc.unregisterCallback(callback);
+  }
+}
 async function pingServers(servers,samples){
   if(!nativeHost()){toast('Real latency testing requires the native app and Xray-core');return}
   if(state.pingBusy){toast('A latency test is already running');return}
@@ -347,8 +367,14 @@ async function pingServers(servers,samples){
   button.setAttribute('aria-busy','true');button.innerHTML=`${icon('close')} <span>Cancel ping</span>`;
   try{
     const summary=await pingPool(servers,samples,
-      async server=>nativeInvoke('measure_server_latency',{outbound:outboundFromShareLink(server.uri),samples}),
+      server=>measureLatency(server,samples,first=>{
+        if(state.servers.some(s=>s.id===server.id&&s.signature===server.signature)){
+          firstPingResults.set(server.id,{...first,signature:server.signature});
+          render();
+        }
+      }),
       (server,result,done,total)=>{
+        firstPingResults.delete(server.id);
         // A subscription refresh may have removed this entry while probing.
         if(state.servers.some(s=>s.id===server.id&&s.signature===server.signature)){
           safeAction(()=>repo.setLatency(server.id,result));
@@ -359,11 +385,11 @@ async function pingServers(servers,samples){
       },{concurrency:3,shouldStop:()=>state.pingAbort});
     toast(`Real-delay tests ${summary.cancelled?'cancelled':'completed'}: ${summary.finished}/${summary.total}`);
   }catch(err){toast(errorMessage(err))}
-  finally{state.pingBusy=false;state.pingAbort=false;button.removeAttribute('aria-busy');button.innerHTML=`${icon('activity')} <span>Ping <span class="muted-sub">All</span></span>`;}
+  finally{firstPingResults.clear();state.pingBusy=false;state.pingAbort=false;button.removeAttribute('aria-busy');button.innerHTML=`${icon('activity')} <span>Ping <span class="muted-sub">All</span></span>`;}
 }
 
 function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').innerHTML=icon(active?(state.sortDirection==='asc'?'up':'down'):'sort');btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
-function orderedRows(){const rows=filterServers(state.servers,state.query);return sortServers(rows,state.sortKey,state.sortDirection)}
+function orderedRows(){const rows=filterServers(state.servers,state.query);return sortServers(rows.map(latencyView),state.sortKey,state.sortDirection)}
 function renderTable(){const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
     const starCell=tr.insertCell();
     const actions=document.createElement('div');actions.className='row-actions';
@@ -375,7 +401,7 @@ function renderTable(){const rows=orderedRows(),body=$('serverRows');const focus
     actions.append(star,pin);starCell.append(actions);
     const nameCell=tr.insertCell();const wrap=document.createElement('div');wrap.className='name-cell';const flag=document.createElement('span');flag.className='flag';renderFlag(flag,s,icon('globe'));const name=document.createElement('span');name.className='server-name';name.textContent=displayServerName(s);wrap.append(flag,name);nameCell.append(wrap);
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
-    const latencyCell=tr.insertCell();const latency=document.createElement('span');latency.className='latency-text '+latencyClass(s.latency);latency.textContent=typeof s.latency==='number'?`${s.latency}`:s.latencyStatus==='timeout'?'Timeout':s.latencyStatus==='error'?'Failed':'—';latency.title=s.latencyAttempted?`${s.latencySuccess||0}/${s.latencyAttempted} successful real-delay probes`: 'Not measured';latencyCell.append(latency);
+    const latencyCell=tr.insertCell();const latency=document.createElement('span');latency.className='latency-text '+latencyClass(s.latency);latency.textContent=typeof s.latency==='number'?`${s.latency}`:s.latencyStatus==='timeout'?'Timeout':s.latencyStatus==='error'?'Failed':'—';latency.dataset.provisional=String(Boolean(s.provisional));latency.title=s.provisional?'First probe · waiting for the average':s.latencyAttempted?`${s.latencySuccess||0}/${s.latencyAttempted} successful real-delay probes`: 'Not measured';latencyCell.append(latency);
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
     tr.addEventListener('click',()=>setSelected(s.id));tr.addEventListener('dblclick',()=>{setSelected(s.id);void connectSelected(s.id)});
     tr.addEventListener('contextmenu',e=>{e.preventDefault();setSelected(s.id);showContextMenu(s.id,e.clientX,e.clientY)});
@@ -387,7 +413,7 @@ function toggleFavorite(id){if(safeAction(()=>repo.toggleFavorite(id)))sync()}
 function togglePin(id){if(safeAction(()=>repo.togglePin(id)))sync()}
 function closeContextMenu(){$('contextMenu').hidden=true;state.contextId=null}
 function addMenuButton(parent,iconName,label,action,{disabled=false,danger=false}={}){const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.className='menu-button'+(danger?' menu-danger':'');button.disabled=disabled;const iconSpan=document.createElement('span');iconSpan.className='menu-icon';iconSpan.innerHTML=icon(iconName);const txt=document.createElement('span');txt.textContent=label;button.append(iconSpan,txt);if(!disabled)button.addEventListener('click',()=>{closeContextMenu();action()});parent.append(button);return button}
-function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});addMenuButton(menu,'activity','Ping (×1)',()=>void pingServers([s],1));addMenuButton(menu,'activity','Ping (×3) — Average',()=>void pingServers([s],3));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'pin',s.pinned?'Unpin server':'Pin server',()=>togglePin(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
+function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});for(const samples of [1,2,3])addMenuButton(menu,'activity',`Ping (×${samples})${samples>1?' — Average':''}`,()=>void pingServers([s],samples));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'pin',s.pinned?'Unpin server':'Pin server',()=>togglePin(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
 function closePasteMenu(){$('pasteMenu').hidden=true;$('pasteMenuButton').setAttribute('aria-expanded','false')}
 function showDialog(id){const target=$(id);for(const dialog of document.querySelectorAll('dialog[open]')){if(dialog!==target)dialog.close()}if(!target.open)target.showModal()}
 function confirmAction(title,description,acceptLabel='Delete',keepLabel=null){return new Promise(resolve=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmDescription').textContent=description;$('confirmAccept').textContent=acceptLabel;$('confirmKeep').hidden=!keepLabel;if(keepLabel)$('confirmKeep').textContent=keepLabel;let done=false;const finish=result=>{if(done)return;done=true;dialog.close();dialog.removeEventListener('close',cancel);$('confirmCancel').removeEventListener('click',onCancel);$('confirmClose').removeEventListener('click',onCancel);$('confirmAccept').removeEventListener('click',onYes);$('confirmKeep').removeEventListener('click',onKeep);resolve(result)};const cancel=()=>finish(false),onCancel=()=>finish(false),onYes=()=>finish(true),onKeep=()=>finish('keep');dialog.addEventListener('close',cancel);$('confirmCancel').addEventListener('click',onCancel);$('confirmClose').addEventListener('click',onCancel);$('confirmAccept').addEventListener('click',onYes);$('confirmKeep').addEventListener('click',onKeep);showDialog('confirmDialog')})}
@@ -502,7 +528,7 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
     });
     $(id).addEventListener('change',persist);
   }
-  $('pingSamples').addEventListener('change',e=>{state.pingSamples=Number(e.target.value)===1?1:3;persist();toast(`Ping All: ${state.pingSamples} real-delay probe${state.pingSamples===1?'':'s'} per server`)});
+  $('pingSamples').addEventListener('change',e=>{state.pingSamples=Number(e.target.value);persist();toast(`Ping All: ${state.pingSamples} real-delay probe${state.pingSamples===1?'':'s'} per server`)});
   document.addEventListener('click',e=>{if(!e.target.closest('#contextMenu'))closeContextMenu();if(!e.target.closest('.paste-group'))closePasteMenu()});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeContextMenu();closePasteMenu()}});
   window.addEventListener('resize',closeContextMenu);

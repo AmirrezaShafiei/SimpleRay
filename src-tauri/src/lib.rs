@@ -81,8 +81,12 @@ async fn ping_active_connection(manager:State<'_,EngineManager>,server_id:String
     manager.ping_active(&server_id,false).await
 }
 #[tauri::command]
-async fn measure_server_latency(app:AppHandle,manager:State<'_,EngineManager>,outbound:Value,samples:u8)->Result<LatencyResult,String>{
-    manager.measure_candidate(&app,outbound,samples).await
+async fn measure_server_latency(
+    app:AppHandle, webview:tauri::Webview, manager:State<'_,EngineManager>,
+    outbound:Value, samples:u8, on_first:Option<tauri::ipc::JavaScriptChannelId>,
+)->Result<LatencyResult,String>{
+    let progress=on_first.map(|channel|channel.channel_on(webview));
+    manager.measure_candidate(&app,outbound,samples,progress).await
 }
 #[tauri::command]
 async fn configure_server_switching(manager:State<'_,EngineManager>,mode:switching::SwitchMode,candidates:Vec<switching::Profile>)->Result<(),String>{

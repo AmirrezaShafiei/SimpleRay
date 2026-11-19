@@ -50,3 +50,38 @@ test('unknown transport, plugin and invalid REALITY shortID are rejected without
     'ss://YWVzLTEyOC1nY206cGFzcw@example.com:8388?plugin=obfs-local%3Bobfs%3Dhttp'
   ])assert.throws(()=>outboundFromShareLink(uri),e=>!e.message.includes('secret')&&!e.message.includes('pass')&&!e.message.includes('google.com'));
 });
+
+const wgSecret=Buffer.alloc(32,7).toString('base64');
+const wgPublic=Buffer.alloc(32,8).toString('base64');
+const wgShare=`wireguard://${encodeURIComponent(wgSecret)}@[2001:db8::1]:51820?publickey=${encodeURIComponent(wgPublic)}&address=10.7.0.2%2F32&reserved=1,2,3#WG`;
+test('WireGuard share links and wg-quick text produce a user-space WireGuard outbound',()=>{
+  const link=outboundFromShareLink(wgShare);
+  assert.deepEqual(link.settings.peers,[{endpoint:'[2001:db8::1]:51820',publicKey:wgPublic}]);
+  assert.deepEqual(link.settings.reserved,[1,2,3]);
+  const text=outboundFromShareLink(`# exported profile\n[Interface]\nPrivateKey = ${wgSecret}\nAddress = 10.7.0.2/32\nDNS = 1.1.1.1\nPostUp = example-hook\n[Peer]\nPublicKey = ${wgPublic}\nEndpoint = [2001:db8::1]:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25`);
+  assert.equal(text.settings.secretKey,wgSecret);
+  assert.equal(text.settings.noKernelTun,true);
+  assert.equal(text.settings.peers[0].keepAlive,25);
+  assert.deepEqual(text.settings.peers[0].allowedIPs,['0.0.0.0/0','::/0']);
+  assert.ok(!JSON.stringify(text).includes('example-hook'));
+  assert.throws(()=>outboundFromShareLink(wgShare.replace(encodeURIComponent(wgPublic),'bad-public-key')),/32-byte WireGuard key/);
+});
+
+test('alternate VMess URLs, Hysteria2, SOCKS5 and HTTPS proxy map to distinct outbounds',()=>{
+  const vm=outboundFromShareLink(`vmess://${id}@example.test:443?type=ws&path=%2Fws&security=tls`);
+  assert.equal(vm.settings.vnext[0].users[0].id,id);
+  assert.equal(vm.streamSettings.wsSettings.path,'/ws');
+  const hy=outboundFromShareLink('hy2://user:pass@example.test:443,5000-5003/?sni=proxy.test&obfs=salamander&obfs-password=mask');
+  assert.equal(hy.protocol,'hysteria');
+  assert.equal(hy.streamSettings.hysteriaSettings.auth,'user:pass');
+  assert.equal(hy.streamSettings.finalmask.quicParams.udpHop.ports,'443,5000-5003');
+  assert.equal(hy.streamSettings.finalmask.udp[0].settings.password,'mask');
+  assert.equal(outboundFromShareLink('hysteria2://pass@example.test').settings.port,443);
+  assert.throws(()=>outboundFromShareLink('hy2://pass@example.test?insecure=1'),/certificate pin/);
+  const socks=outboundFromShareLink('socks5://user:p%40ss@example.test:1080');
+  assert.equal(socks.settings.pass,'p@ss');
+  assert.equal(socks.protocol,'socks');
+  const https=outboundFromShareLink('https-proxy://example.test:8443');
+  assert.equal(https.protocol,'http');
+  assert.equal(https.streamSettings.security,'tls');
+});

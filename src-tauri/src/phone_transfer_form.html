@@ -20,9 +20,10 @@
 <body>
   <main>
     <h1>Send to SimpleRay</h1>
-    <p>Copy a server’s share link from your VPN app and paste it below.</p>
+    <p>Paste a server share link or the contents of a WireGuard configuration.</p>
     <form method="post" autocomplete="off">
-      <label for="link">Share link</label>
+      <input type="hidden" name="form_token" value="__FORM_TOKEN__">
+      <label for="link">Server configuration</label>
       <textarea id="link" name="link" maxlength="16384" placeholder="vless://…" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
       <button type="submit">Send to computer</button>
     </form>

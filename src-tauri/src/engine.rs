@@ -138,7 +138,7 @@ fn validate_outbound(outbound:&Value)->Result<(),String>{
         return Err("Unexpected outbound fields".into())
     }
     if obj.get("tag").and_then(Value::as_str)!=Some("proxy") {return Err("Outbound tag must be proxy".into())}
-    if !matches!(obj.get("protocol").and_then(Value::as_str),Some("vmess"|"vless"|"trojan"|"shadowsocks")){
+    if !matches!(obj.get("protocol").and_then(Value::as_str),Some("vmess"|"vless"|"trojan"|"shadowsocks"|"wireguard"|"hysteria"|"socks"|"http")){
         return Err("Unsupported outbound protocol".into())
     }
     if !obj.get("settings").is_some_and(Value::is_object){return Err("Missing outbound settings".into())}
@@ -527,7 +527,7 @@ impl EngineManager {
             let handle=app.clone();
             jobs.spawn(async move {
                 let manager=handle.state::<EngineManager>();
-                let result=manager.measure_candidate(&handle,profile.outbound,1).await.ok().and_then(|result|result.average_ms);
+                let result=manager.measure_candidate(&handle,profile.outbound,1,None).await.ok().and_then(|result|result.average_ms);
                 (profile.server_id,result)
             });
         }
@@ -575,9 +575,11 @@ impl EngineManager {
         }
     }
 
-    pub async fn measure_candidate(&self,app:&AppHandle,outbound:Value,samples:u8)->Result<LatencyResult,String>{
+    pub async fn measure_candidate(
+        &self,app:&AppHandle,outbound:Value,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,
+    )->Result<LatencyResult,String>{
         let _permit=self.candidate_probes.acquire().await.map_err(|_|"Latency tester unavailable")?;
-        ping_server(app,outbound,samples).await
+        ping_server(app,outbound,samples,progress).await
     }
 
     pub async fn shutdown(&self,app:&AppHandle){let _=self.disconnect(app).await;}
@@ -607,30 +609,54 @@ async fn query_traffic(app:&AppHandle,port:u16)->Result<TrafficBytes,String>{
     }
     Ok(traffic)
 }
-pub async fn ping_server(app:&AppHandle,outbound:Value,samples:u8)->Result<LatencyResult,String>{
-    if samples!=1 && samples!=3{return Err("Ping measurements must be 1 or 3".into())}
+fn latency_result(values:Vec<u64>, attempted:u8, reason:Option<String>)->LatencyResult {
+    let successful=values.len() as u8;
+    let average_ms=if successful==0 {None} else {
+        let count=u128::from(successful);
+        let sum: u128=values.iter().copied().map(u128::from).sum();
+        Some(((sum+count/2)/count) as u64)
+    };
+    LatencyResult {
+        average_ms,successful,attempted,samples_ms:values,
+        reason:if average_ms.is_none(){Some(reason.unwrap_or_else(||"No successful response".into()))}else{None},
+    }
+}
+
+async fn ping_server(
+    app:&AppHandle,outbound:Value,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,
+)->Result<LatencyResult,String>{
+    if !(1..=3).contains(&samples){return Err("Ping measurements must be 1, 2 or 3".into())}
     let core=start_xray(app,outbound,false).await?;
-    let mut values=Vec::new();let mut reason=None;
-    for _ in 0..samples{
+    let mut values=Vec::with_capacity(samples.into());
+    let mut reason=None;
+    for attempt in 1..=samples{
         match probe_once(core.proxy_port).await{
             Ok(ms)=>values.push(ms),
             Err(e)=>{
-                if reason.is_none()||!e.contains("timed out") {
-                    reason=Some(e);
-                }
+                if reason.is_none()||!e.contains("timed out") { reason=Some(e); }
+            }
+        }
+        if attempt==1 && samples>1 {
+            if let Some(channel)=&progress {
+                let _=channel.send(latency_result(values.clone(),1,reason.clone()));
             }
         }
     }
     kill(core).await;
-    let sum:u128=values.iter().map(|v|*v as u128).sum();
-    let avg=if values.is_empty(){None}else{Some((sum/values.len() as u128).min(u64::MAX as u128) as u64)};
-    Ok(LatencyResult{average_ms:avg,successful:values.len() as u8,attempted:samples,samples_ms:values,
-        reason:if avg.is_none(){Some(reason.unwrap_or_else(||"No successful response".into()))}else{None}})
+    Ok(latency_result(values,samples,reason))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn latency_average_uses_successful_probes_and_keeps_attempt_count() {
+        let result=latency_result(vec![203,300],3,None);
+        assert_eq!((result.average_ms,result.successful,result.attempted),(Some(252),2,3));
+        let failed=latency_result(Vec::new(),1,Some("timed out".into()));
+        assert_eq!((failed.average_ms,failed.successful,failed.attempted),(None,0,1));
+        assert_eq!(failed.reason.as_deref(),Some("timed out"));
+    }
     #[test]fn rejects_arbitrary_outbound(){assert!(validate_outbound(&json!({"tag":"proxy","protocol":"freedom","settings":{}})).is_err());}
     #[test]fn configured_ports_are_local_only(){
         let value=xray_config(json!({"tag":"proxy","protocol":"trojan","settings":{}}),1234,Some(5678));

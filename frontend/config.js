@@ -2,7 +2,9 @@
  * SimpleRay share-link parser. No network, DOM or storage dependencies.
  * These imported records are not an assertion that Xray-core can connect yet.
  */
-export const PROTOCOLS=Object.freeze(['VMess','VLESS','Trojan','Shadowsocks']);
+import {EXTRA_SCHEMES,isHttpProxyUrl,isWireGuardConfig,parseExtraProfile} from './extra-profiles.js';
+
+export const PROTOCOLS=Object.freeze(['VMess','VLESS','Trojan','Shadowsocks','WireGuard','Hysteria2','SOCKS5','HTTP','HTTPS']);
 const MAX_IMPORT_CHARS=2_000_000;
 const MAX_LINES=3000;
 const SUB_PREFIX=/^https?:\/\//i;
@@ -45,7 +47,7 @@ function parseURI(url,protocol){
   const username=decodeURIComponent(u.username||'');
   const fallback=host+':'+port;
   const name=label(u.hash.slice(1),fallback);
-  if(protocol==='VLESS'&&!UUID.test(username))fail('VLESS requires a valid UUID');
+  if(['VLESS','VMess'].includes(protocol)&&!UUID.test(username))fail(protocol+' requires a valid UUID');
   if(protocol==='Trojan'&&!username)fail('Trojan password is missing');
   const signature=protocol+':'+u.username+'@'+u.host+u.search;
   return details({name,type:protocol,host,port},url,signature);
@@ -75,10 +77,16 @@ function parseShadowsocks(uri){
 }
 export function parseShareLink(raw){
   const uri=String(raw??'').trim();if(uri.length>16384)fail('Share link is too long');
+  if(/^vmess:\/\/[^/?#@]+@/i.test(uri))return parseURI(uri,'VMess');
   if(/^vmess:\/\//i.test(uri))return parseVmess(uri);
   if(/^vless:\/\//i.test(uri))return parseURI(uri,'VLESS');
   if(/^trojan:\/\//i.test(uri))return parseURI(uri,'Trojan');
   if(/^ss:\/\//i.test(uri))return parseShadowsocks(uri);
+  const extra=parseExtraProfile(uri);
+  if(extra){
+    const {outbound,...record}=extra;
+    return details(record,uri,JSON.stringify(outbound));
+  }
   fail('Unsupported share-link scheme');
 }
 export function validateSubscriptionUrl(value){
@@ -90,8 +98,9 @@ export function validateSubscriptionUrl(value){
 }
 function extractLines(input){
   const trimmed=String(input??'').trim();if(!trimmed)return [];
-  if(URI_PREFIX.test(trimmed)||SUB_PREFIX.test(trimmed)||/\n/.test(trimmed))return trimmed.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-  try{const decoded=decodeBase64(trimmed);if(URI_PREFIX.test(decoded.trim())||/\n/.test(decoded))return decoded.split(/\r?\n/).map(s=>s.trim()).filter(Boolean)}catch{/* report as invalid below */}
+  if(isWireGuardConfig(trimmed))return [trimmed];
+  if(URI_PREFIX.test(trimmed)||EXTRA_SCHEMES.test(trimmed)||SUB_PREFIX.test(trimmed)||/\n/.test(trimmed))return trimmed.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  try{const decoded=decodeBase64(trimmed);if(isWireGuardConfig(decoded))return [decoded];if(URI_PREFIX.test(decoded.trim())||EXTRA_SCHEMES.test(decoded.trim())||/\n/.test(decoded))return decoded.split(/\r?\n/).map(s=>s.trim()).filter(Boolean)}catch{/* report as invalid below */}
   return [trimmed];
 }
 export function parseImport(input,{allowSubscriptionUrls=true}={}){
@@ -99,9 +108,9 @@ export function parseImport(input,{allowSubscriptionUrls=true}={}){
   const lines=extractLines(input);if(lines.length>MAX_LINES)fail('Too many import entries');
   const servers=[],subscriptionUrls=[],errors=[],seen=new Set();
   for(let i=0;i<lines.length;i++){
-    const line=lines[i];if(!line || line.startsWith('#'))continue;
+    const line=lines[i];if(!line || (line.startsWith('#')&&!isWireGuardConfig(line)))continue;
     try{
-      if(SUB_PREFIX.test(line)){
+      if(SUB_PREFIX.test(line)&&!isHttpProxyUrl(line)){
         if(!allowSubscriptionUrls)fail('Subscription data must contain proxy links, not another URL');
         const url=validateSubscriptionUrl(line);
         if(!subscriptionUrls.includes(url))subscriptionUrls.push(url);

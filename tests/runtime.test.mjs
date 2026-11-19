@@ -40,3 +40,11 @@ test('Ping All supports a single sample and cancels queued nodes',async()=>{
   },{concurrency:1,shouldStop:()=>cancelled});
   assert.deepEqual(seen,['a']);assert.equal(summary.finished,1);assert.equal(summary.cancelled,true);
 });
+test('Ping All supports two probes and reports the returned average',async()=>{
+  const [row]=[{id:'a'}];
+  let result;
+  const summary=await pingPool([row],2,async()=>({averageMs:240,successful:2,attempted:2}),
+    (_server,value)=>{result=value});
+  assert.equal(summary.finished,1);
+  assert.deepEqual(result,{latency:240,latencyStatus:'ok',latencySuccess:2,latencyAttempted:2});
+});

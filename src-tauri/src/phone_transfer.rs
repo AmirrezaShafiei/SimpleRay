@@ -96,14 +96,16 @@ impl PhoneTransfer {
             .map_err(|_| "Unable to open the local receiver on this network")?;
         let authority = listener.local_addr()
             .map_err(|_| "Unable to read the local receiver address")?.to_string();
-        let mut token = [0u8; 16];
+        let mut token = [0u8; 32];
         getrandom::fill(&mut token).map_err(|_| "Unable to create a private transfer code")?;
-        let id: String = token.iter().map(|byte| format!("{byte:02x}")).collect();
+        let hex = |bytes: &[u8]| -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() };
+        let id = hex(&token[..16]);
+        let form_token = hex(&token[16..]);
         let path = format!("/receive/{id}");
         let url = format!("http://{authority}{path}");
         let until = Instant::now() + LIFETIME;
         let data = Arc::new(Mutex::new(Mailbox::Waiting));
-        let server = tokio::spawn(serve(listener, path, authority, until, data.clone()));
+        let server = tokio::spawn(serve(listener, path, authority, form_token, until, data.clone()));
         let session = Session { id: id.clone(), until, data, server };
         *self.0.lock().map_err(|_| "Phone receiver unavailable")? = Some(session);
         Ok(Invite { id, url, expires_in: LIFETIME.as_secs() })
@@ -143,6 +145,7 @@ async fn serve(
     listener: TcpListener,
     path: String,
     authority: String,
+    form_token: String,
     until: Instant,
     data: Arc<Mutex<Mailbox>>,
 ) {
@@ -161,9 +164,10 @@ async fn serve(
                 }
                 let path = path.clone();
                 let authority = authority.clone();
+                let form_token = form_token.clone();
                 let data = data.clone();
                 clients.spawn(async move {
-                    let handler = service_fn(|request| handle(request, &path, &authority, &data));
+                    let handler = service_fn(|request| handle(request, &path, &authority, &form_token, &data));
                     let connection = http1::Builder::new()
                         .keep_alive(false)
                         .serve_connection(TokioIo::new(socket), handler);
@@ -177,7 +181,7 @@ async fn serve(
 type Reply = Response<Full<Bytes>>;
 
 async fn handle(
-    request: Request<Incoming>, path: &str, authority: &str, mailbox: &Mutex<Mailbox>,
+    request: Request<Incoming>, path: &str, authority: &str, form_token: &str, mailbox: &Mutex<Mailbox>,
 ) -> Result<Reply, Infallible> {
     if request.uri().path_and_query().map(|value| value.as_str()) != Some(path)
         || request.headers().get(header::HOST).and_then(|value| value.to_str().ok()) != Some(authority)
@@ -186,35 +190,48 @@ async fn handle(
     }
     if request.method() == Method::GET {
         let ready = mailbox.lock().is_ok_and(|value| matches!(*value, Mailbox::Waiting));
-        return Ok(if ready { page(StatusCode::OK, FORM.to_owned()) } else { used() });
+        if !ready { return Ok(used()); }
+        let mut form = page(StatusCode::OK, FORM.replace("__FORM_TOKEN__", form_token));
+        // HTML form POSTs can replace Origin with "null" under no-referrer.
+        // Keep the referrer local to this page and preserve the real Origin.
+        form.headers_mut().insert(header::REFERRER_POLICY, header::HeaderValue::from_static("same-origin"));
+        return Ok(form);
     }
     if request.method() != Method::POST {
         return Ok(message(StatusCode::METHOD_NOT_ALLOWED, "Method unavailable", "Open the transfer link in your browser."));
     }
     let expected_origin = format!("http://{authority}");
-    if request.headers().get(header::ORIGIN).is_some_and(|value| value.as_bytes() != expected_origin.as_bytes())
-        || request.headers().get("sec-fetch-site").is_some_and(|value| value == "cross-site")
-        || !request.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.split(';').next() == Some("application/x-www-form-urlencoded"))
-    {
-        return Ok(message(StatusCode::FORBIDDEN, "Transfer rejected", "Open the transfer link from SimpleRay and try again."));
+    if request.headers().get(header::ORIGIN).is_some_and(|value| {
+        value != "null" && value.as_bytes() != expected_origin.as_bytes()
+    }) || request.headers().get("sec-fetch-site").is_some_and(|value| value == "cross-site" || value == "same-site") {
+        return Ok(rejected_form());
+    }
+    let form_encoded = request.headers().get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/x-www-form-urlencoded"));
+    if !form_encoded {
+        return Ok(message(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Open the SimpleRay form", "Scan a new QR code and send from the form that opens."));
     }
 
-    let Ok(body) = Limited::new(request.into_body(), MAX_LINK_BYTES * 3 + 16).collect().await else {
-        return Ok(message(StatusCode::PAYLOAD_TOO_LARGE, "Link is too long", "Share a single configuration link."));
+    let Ok(body) = Limited::new(request.into_body(), MAX_LINK_BYTES * 3 + 64).collect().await else {
+        return Ok(message(StatusCode::PAYLOAD_TOO_LARGE, "Configuration is too long", "Send one share link or one WireGuard profile."));
     };
     let bytes = body.to_bytes();
     let Ok(form) = std::str::from_utf8(&bytes) else { return Ok(invalid_link()) };
-    let Some((_, value)) = form_urlencoded::parse(form.as_bytes()).find(|(key, _)| key == "link") else {
-        return Ok(invalid_link());
-    };
-    let link = value.trim();
-    let scheme = link.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase());
-    if link.len() > MAX_LINK_BYTES || link.contains(['\r', '\n'])
-        || !matches!(scheme.as_deref(), Some("vless" | "vmess" | "trojan" | "ss"))
-    {
-        return Ok(invalid_link());
+    let mut link = None;
+    let mut valid_form = false;
+    for (key, value) in form_urlencoded::parse(form.as_bytes()) {
+        match key.as_ref() {
+            "link" => link = Some(value),
+            "form_token" => valid_form = value == form_token,
+            _ => {}
+        }
     }
+    if !valid_form { return Ok(rejected_form()); }
+    let Some(link) = link.as_deref().map(str::trim).filter(|link| {
+        !link.is_empty() && link.len() <= MAX_LINK_BYTES
+    }) else { return Ok(invalid_link()) };
+    // The desktop import parser validates the shared format and its fields.
     let Ok(mut inbox) = mailbox.lock() else {
         return Ok(message(StatusCode::SERVICE_UNAVAILABLE, "Receiver unavailable", "Create a new transfer code in SimpleRay."));
     };
@@ -225,8 +242,12 @@ async fn handle(
     Ok(message(StatusCode::OK, "Sent to SimpleRay", "Check your computer for the import and connection test."))
 }
 
+fn rejected_form() -> Reply {
+    message(StatusCode::FORBIDDEN, "Transfer rejected", "Open a new QR code from SimpleRay and send from the page it opens.")
+}
+
 fn invalid_link() -> Reply {
-    message(StatusCode::BAD_REQUEST, "Unsupported link", "Go back and paste one VMess, VLESS, Trojan or Shadowsocks share link.")
+    message(StatusCode::BAD_REQUEST, "No configuration received", "Go back and paste one share link or WireGuard profile.")
 }
 
 fn used() -> Reply {
@@ -264,16 +285,27 @@ mod tests {
         let get = client.get(&invite.url).send().await.unwrap();
         assert_eq!(get.status(), StatusCode::OK);
         assert_eq!(get.headers()[header::CACHE_CONTROL], "no-store");
-        assert!(get.text().await.unwrap().contains("name=\"link\""));
+        assert_eq!(get.headers()[header::REFERRER_POLICY], "same-origin");
+        let form = get.text().await.unwrap();
+        assert!(form.contains("name=\"link\""));
+        let token = form.split_once("name=\"form_token\" value=\"").unwrap().1.split('"').next().unwrap();
+        assert_eq!(token.len(), 32);
+        assert_ne!(token, invite.id);
         assert!(matches!(receiver.poll(&invite.id).unwrap(), Receipt::Waiting));
 
         let link = "vless://dummy@example.test:443#Example";
-        let send = || client.post(&invite.url).form(&[("link", link)]);
+        let local_origin = invite.url.split("/receive/").next().unwrap();
+        let send = || client.post(&invite.url).form(&[("link", link), ("form_token", token)]);
         let rejected = send().header(header::ORIGIN, "https://other.example").send().await.unwrap();
         assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
-        let wrong_link = client.post(&invite.url).form(&[("link", "https://example.test")]).send().await.unwrap();
-        assert_eq!(wrong_link.status(), StatusCode::BAD_REQUEST);
-        let (one, two) = tokio::join!(send().send(), send().send());
+        let cross_site = send().header(header::ORIGIN, "null").header("sec-fetch-site", "cross-site").send().await.unwrap();
+        assert_eq!(cross_site.status(), StatusCode::FORBIDDEN);
+        let missing_token = client.post(&invite.url).header(header::ORIGIN, "null").form(&[("link", link)]).send().await.unwrap();
+        assert_eq!(missing_token.status(), StatusCode::FORBIDDEN);
+        let (one, two) = tokio::join!(
+            send().header(header::ORIGIN, "null").send(),
+            send().header(header::ORIGIN, local_origin).send()
+        );
         let mut statuses = [one.unwrap().status(), two.unwrap().status()];
         statuses.sort();
         assert_eq!(statuses, [StatusCode::OK, StatusCode::GONE]);

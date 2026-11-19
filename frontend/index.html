@@ -88,7 +88,7 @@
       <label>Accent <input type="color" id="accentColor" value="#3eadef" /></label>
     </div>
   </div>
-  <div class="setting-line"><div><strong>Ping All samples</strong><p>Average of three real-delay probes by default</p></div><select id="pingSamples" aria-label="Ping All samples"><option value="3">3 — Average</option><option value="1">1 — Single</option></select></div><div class="setting-line"><div><strong>Server switching</strong><p>Live latency stays on in all modes</p></div><select id="switchMode" aria-label="Server switching"><option value="off">Off</option><option value="suggest">Suggest</option><option value="automatic">Automatic</option></select></div>
+  <div class="setting-line"><div><strong>Ping All samples</strong><p>Average of three real-delay probes by default</p></div><select id="pingSamples" aria-label="Ping All samples"><option value="1">1 — Single</option><option value="2">2 — Balanced</option><option value="3">3 — Average</option></select></div><div class="setting-line"><div><strong>Server switching</strong><p>Live latency stays on in all modes</p></div><select id="switchMode" aria-label="Server switching"><option value="off">Off</option><option value="suggest">Suggest</option><option value="automatic">Automatic</option></select></div>
   <div class="setting-line" id="switchSourceRow" hidden><div><strong>Candidate servers</strong><p>Up to 4 candidates, in saved order</p></div><select id="switchSource" aria-label="Candidate servers"><option value="favorites">Favorites</option></select></div>
   <div class="setting-line"><div><strong>Start with Windows</strong><p>Launch minimized after Windows sign-in</p></div><input type="checkbox" id="startupToggle" aria-label="Start with Windows" /></div><div class="setting-line"><div><strong>Minimize to tray</strong><p>Closing the main window keeps SimpleRay running</p></div><input type="checkbox" id="trayToggle" aria-label="Minimize to tray" checked /></div><div class="setting-line"><div><strong>Auto-connect on app start</strong><p>Connect last selected server, if available</p></div><input type="checkbox" id="autoConnectToggle" aria-label="Auto-connect on app start" /></div><div class="setting-line"><div><strong>Subscriptions</strong><p>Add, rename, refresh, or delete subscriptions</p></div><button type="button" class="dialog-action" id="settingsSubscriptions">Manage</button></div><p class="settings-footnote">Changes are saved automatically. Connection credentials are still stored in local WebView storage without encryption; use on a trusted Windows profile only. The bundled Xray-core is an independent MPL-2.0 component.</p></dialog>
   <dialog id="phoneTransferDialog" class="settings-dialog action-dialog phone-dialog" aria-labelledby="phoneTransferTitle">
@@ -98,7 +98,7 @@
       <img id="phoneQr" alt="QR code for the SimpleRay transfer page" width="180" height="180" />
       <div class="phone-qr-instructions">
         <strong>Scan with your phone camera</strong>
-        <p class="field-hint">Paste the server’s share link in your phone browser and tap Send.</p>
+        <p class="field-hint">Paste a share link or WireGuard profile into the phone browser and tap Send.</p>
         <details><summary>Enter the link manually</summary><input id="phoneTransferUrl" aria-label="Local transfer link" readonly /></details>
       </div>
     </div>
@@ -116,7 +116,7 @@
   <dialog id="manualDialog" class="settings-dialog action-dialog" aria-label="Manual configuration">
     <form id="manualForm">
       <div class="dialog-heading"><div><small>CONFIGURATION</small><h2 id="manualDialogTitle">Add server</h2></div><button class="dialog-close" type="button" data-close="manualDialog" aria-label="Close"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
-      <label class="field-label" for="manualUri">Share link</label><textarea id="manualUri" spellcheck="false" rows="4" placeholder="vless://… or vmess://…"></textarea>
+      <label class="field-label" for="manualUri">Share link or WireGuard profile</label><textarea id="manualUri" spellcheck="false" rows="4" placeholder="vless://… or vmess://…"></textarea>
       <label class="field-label" for="manualName">Display name (optional)</label><input id="manualName" autocomplete="off" placeholder="From share link if blank" maxlength="160" />
       <p class="field-hint">Sensitive configuration data is saved locally on this computer.</p>
       <p class="form-error" id="manualError" role="alert"></p>

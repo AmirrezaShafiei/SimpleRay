@@ -41,3 +41,15 @@ test('VMess stable signature excludes the display name',()=>{
 test('invalid base64 subscription does not remove existing data',()=>{
  assert.throws(()=>parseSubscriptionPayload('eW91IGFyZSBub3QgYSBjb25maWc='));
 });
+
+test('WireGuard file text, subscription links and new proxy URLs follow existing import paths',()=>{
+ const privateKey=Buffer.alloc(32,2).toString('base64');
+ const publicKey=Buffer.alloc(32,3).toString('base64');
+ const conf=`# local test\n[Interface]\nPrivateKey = ${privateKey}\nAddress = 10.12.0.2/32\n[Peer]\nPublicKey = ${publicKey}\nEndpoint = wg.example.test:51820`;
+ assert.equal(parseImport(conf).servers[0].type,'WireGuard');
+ const wg=`wg://${encodeURIComponent(privateKey)}@wg.example.test:51820?publickey=${encodeURIComponent(publicKey)}#Test`;
+ const raw=[wg,'socks5://user:pass@example.test:1080','https-proxy://example.test:8443','hy2://pass@example.test','https://user:pass@example.test:8443'].join('\n');
+ assert.deepEqual(parseSubscriptionPayload(b64(raw)).servers.map(s=>s.type),['WireGuard','SOCKS5','HTTPS','Hysteria2','HTTPS']);
+ const withSubscription=parseImport(raw+'\nhttps://provider.test/subscription');
+ assert.deepEqual(withSubscription.subscriptionUrls,['https://provider.test/subscription']);
+});

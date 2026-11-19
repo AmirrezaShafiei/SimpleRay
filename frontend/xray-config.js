@@ -5,6 +5,7 @@
  * See https://xtls.github.io/en/config/transport.html
  */
 import {parseShareLink} from './config.js';
+import {parseExtraProfile} from './extra-profiles.js';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_URI_LENGTH=16384;
 const allowedFingerprints=new Set(['chrome','firefox','safari','ios','android','edge','360','qq','random','randomized','']);
@@ -92,6 +93,11 @@ function fromURL(uri,protocol){
     const user={id:reqUUID(username),encryption};if(q('flow'))user.flow=q('flow');
     return {tag:'proxy',protocol,settings:{vnext:[{address,port,users:[user]}]},streamSettings};
   }
+  if(protocol==='vmess'){
+    const user={id:reqUUID(username),alterId:Number(q('aid')||0),security:q('scy')||'auto'};
+    if(!Number.isInteger(user.alterId)||user.alterId<0)invalid('VMess alterId');
+    return {tag:'proxy',protocol,settings:{vnext:[{address,port,users:[user]}]},streamSettings};
+  }
   if(protocol==='trojan'){
     const password=requireText(username,'Trojan password');
     return {tag:'proxy',protocol,settings:{servers:[{address,port,password}]},streamSettings};
@@ -134,9 +140,12 @@ function shadowsocks(uri){
 }
 export function outboundFromShareLink(uri){
   const raw=String(uri??'').trim();if(!raw||raw.length>MAX_URI_LENGTH)invalid('link length');
-  parseShareLink(raw); // Reuse Phase-2 canonical validation.
+  const extra=parseExtraProfile(raw);
+  if(extra)return extra.outbound;
+  parseShareLink(raw); // Reuse canonical validation.
   if(/^vless:\/\//i.test(raw))return fromURL(raw,'vless');
   if(/^trojan:\/\//i.test(raw))return fromURL(raw,'trojan');
+  if(/^vmess:\/\/[^/?#@]+@/i.test(raw))return fromURL(raw,'vmess');
   if(/^vmess:\/\//i.test(raw))return vmess(raw);
   if(/^ss:\/\//i.test(raw))return shadowsocks(raw);
   unsupported('protocol');

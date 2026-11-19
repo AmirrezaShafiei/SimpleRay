@@ -189,3 +189,5 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 :root[data-custom-theme=true] .dialog-action.primary{background:color-mix(in srgb,var(--custom-accent) 40%,#131f37);border-color:var(--selectedBorder)}
 :root[data-custom-theme=true] :focus-visible{outline-color:var(--selectedBorder)}
 @media(max-width:400px){.phone-qr-panel{flex-direction:column;align-items:stretch}#phoneQr{align-self:center}}
+
+.latency-text[data-provisional=true]{text-decoration:underline dotted;text-underline-offset:3px}
