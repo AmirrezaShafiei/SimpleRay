@@ -111,7 +111,8 @@ jobs:
           $debugPort = $debugListener.LocalEndpoint.Port
           $debugListener.Stop()
           $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$debugPort"
-          $first = Start-Process -FilePath $exe -PassThru
+          $stderr = Join-Path $env:RUNNER_TEMP 'simpleray-smoke-stderr.txt'
+          $first = Start-Process -FilePath $exe -RedirectStandardError $stderr -PassThru
           Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
           try {
             for ($i=0; $i -lt 20; $i++) {
@@ -122,7 +123,11 @@ jobs:
             }
             if ($first.MainWindowHandle -eq 0) { throw 'Installed app did not open a window' }
             $expectedStartup = '"' + $exe + '" --minimized'
-            $actualStartup = $runKey.GetValue('SimpleRay')
+            for ($i=0; $i -lt 15; $i++) {
+              $actualStartup = $runKey.GetValue('SimpleRay')
+              if ($null -ne $actualStartup) { break }
+              Start-Sleep -Seconds 1
+            }
             if ($actualStartup -ne $expectedStartup) { throw "Start with Windows was not registered by default: $actualStartup" }
             node scripts/tray-webview-smoke.mjs $debugPort
             if ($LASTEXITCODE -ne 0) { throw 'Installed tray WebView checks failed' }
@@ -133,6 +138,9 @@ jobs:
             } finally {
               if (!$second.HasExited) { Stop-Process -Id $second.Id -Force }
             }
+          } catch {
+            Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue
+            throw
           } finally {
             if (!$first.HasExited) { Stop-Process -Id $first.Id -Force }
             $first.WaitForExit()

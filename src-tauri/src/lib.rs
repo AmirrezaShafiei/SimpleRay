@@ -199,6 +199,9 @@ pub fn run(){
         .manage(RoutingGuard::default())
         .manage(tray::ConnectionTray::default())
         .setup(|app|{
+            if let Err(error)=preferences::initialize_startup(){
+                eprintln!("Could not initialize Start with Windows: {error}");
+            }
             // If a previous session crashed while System Proxy was enabled, restore its prior settings.
             // An unrecoverable record blocks proxy takeover instead of overwriting unknown user settings.
             if let Err(e)=system_proxy::recover(&app.handle().clone()){
@@ -207,9 +210,6 @@ pub fn run(){
             app.manage(DesktopSettings::new(app.handle()));
             app.manage(diagnostics::Diagnostics::new(app.handle()));
             tray::setup(app)?;
-            if let Err(error)=preferences::initialize_startup(){
-                eprintln!("Could not initialize Start with Windows: {error}");
-            }
             network_events::start(app.handle());
             let handle=app.handle().clone();
             tauri::async_runtime::spawn(async move {
