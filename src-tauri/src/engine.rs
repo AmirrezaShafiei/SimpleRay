@@ -542,6 +542,11 @@ impl EngineManager {
                 SwitchMode::Off=>None,
             }
         };
+        if let Ok(status)=self.status(app).await {
+            if let Some(decision)=status.health.suggestion.as_ref() {
+                crate::tray::maybe_show_suggestion(app,&decision.server_id);
+            }
+        }
         if let Some((profile,decision))=automatic {
             let _=self.change_connection(app,profile,ConnectionChange::Automatic(decision),
                 Some((round.generation,round.revision))).await;
@@ -581,7 +586,7 @@ async fn query_traffic(app:&AppHandle,port:u16)->Result<(u64,u64),String>{
     Ok((up,down))
 }
 pub async fn ping_server(app:&AppHandle,outbound:Value,samples:u8)->Result<LatencyResult,String>{
-    if samples!=1 && samples!=3{return Err("Ping measurements must be 1 or 3".into())}
+    if ![1,2,3].contains(&samples){return Err("Ping measurements must be 1, 2 or 3".into())}
     let core=start_xray(app,outbound,false).await?;
     let mut values=Vec::new();let mut reason=None;
     for _ in 0..samples{

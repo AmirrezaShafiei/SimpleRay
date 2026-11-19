@@ -124,3 +124,12 @@ Latest user requests: **use the uploaded screenshot as visual reference** (with 
 - Planned runtime: https://github.com/XTLS/Xray-core (Mozilla Public License 2.0); integrate in Phase 3 with required license notices and redistribution review.
 - Additional architectural reference: https://github.com/v2fly/v2ray-core (MIT License); do not copy without checking license and attribution requirements.
 - Phase 1 embeds neither core or any proxy implementation. See [ARCHITECTURE.md](ARCHITECTURE.md) and [PHASE1_REPORT.md](PHASE1_REPORT.md).
+
+
+## Amendment: Quick Switch, theme palettes and Ping x2 (2026-11-19, beta.5)
+**These decisions supersede conflicting older statements above.**
+- **Suggest mode when minimized to Tray:** When a fresh better-server suggestion is available, show an unobtrusive compact Quick Switch popup near the taskbar. It displays the suggested name, comparison of measured real-delay, and a **Switch** action using the existing validated suggestion path. Never switch automatically while mode is Suggest. Do not show this popup over an already visible main window. Suppress repeats for the same suggestion for at least 90 seconds, and close the notification after ~16 seconds or on focus loss.
+- **Manual Tray access:** A normal left-click on the Tray icon opens a compact, searchable server list (favorites displayed first), with one-click server selection and actual connect/switch. Right-click retains the menu; opening the main window is separately available.
+- **Themes:** Ocean, Forest, Violet plus **Custom** primary and accent colors. **Brightness mode Light / Dark / System** is a separate setting applied to *any* color palette. Persist both independently; migrate old Dark/Light/System preference.
+- **Ping:** New default for Ping All is **2 real-delay HTTP samples per server, average of successful probes**. Retain 1, 2 and 3 as Settings choices; the context menu offers 1, 2 and 3 for individual servers. On legacy stored settings migrate an untouched default 3 to 2.
+- No new sidebar or redundant Disconnect button. All existing connection and subscription data remain intact.

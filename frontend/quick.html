@@ -1,0 +1,9 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><title>SimpleRay Quick Switch</title><link rel="stylesheet" href="./quick.css"><script type="module" src="./quick.js"></script></head>
+<body><section class="quick-shell" aria-label="Quick server switch">
+<header><div class="brand"><b class="mark">ϟ</b><span><strong>SimpleRay</strong><small>Quick Switch</small></span></div><div class="actions"><button id="openMain" aria-label="Open full SimpleRay" title="Open full app">↗</button><button id="closeQuick" aria-label="Close quick switch">×</button></div></header>
+<section id="suggestion" class="suggestion" hidden><div><small>BETTER SERVER AVAILABLE</small><strong id="suggestName"></strong><span id="suggestDetail"></span></div><button id="acceptSuggestion">Switch</button></section>
+<div class="connection"><span class="dot" id="quickDot"></span><b id="quickStatus">Disconnected</b><span id="activeName"></span></div>
+<label class="search">⌕ <input id="quickSearch" type="search" autocomplete="off" placeholder="Search servers..." aria-label="Search servers"></label>
+<div class="section-title"><span>SERVERS</span><span id="totalCount">0</span></div><div id="quickServers" class="quick-servers" role="list"></div>
+<footer id="quickMessage" aria-live="polite">Click a server to switch · Esc to close</footer>
+</section></body></html>

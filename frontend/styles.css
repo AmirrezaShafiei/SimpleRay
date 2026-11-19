@@ -119,3 +119,18 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .switch-notice .dialog-action{flex-shrink:0}
 #switchMessage{flex:1;min-width:0;overflow-wrap:anywhere}
 #pingAllButton[aria-busy=true]{background:var(--panel2)}
+
+/* Color palette independently applies in dark, light and system modes. */
+:root{--theme-primary:#267ad8;--theme-accent:#33b9f4}
+:root[data-palette]{--blue:var(--theme-accent);--selectedBorder:var(--theme-primary);--selected:color-mix(in srgb,var(--theme-primary) 25%,var(--panel))}
+:root[data-theme=light][data-palette]{--selected:color-mix(in srgb,var(--theme-primary) 12%,white)}
+.logo{background:linear-gradient(145deg,var(--theme-primary),var(--theme-accent))}.dialog-action.primary{background:var(--theme-primary);border-color:var(--theme-accent)}
+.setting-line input[type=checkbox]:checked{background:var(--theme-primary);border-color:var(--theme-accent)}
+.appearance-settings{margin:10px 0 12px;padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--panel2)}
+.setting-header strong{font-size:13px}.setting-header p{margin:5px 0 12px;font-size:11px;color:var(--muted)}
+.palette-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.palette-choice{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:69px;border:1px solid var(--border);border-radius:10px;background:var(--panel);color:var(--muted);font-size:11px}
+.palette-choice[aria-pressed=true]{color:var(--text);border-color:var(--theme-primary);box-shadow:inset 0 0 0 1px var(--theme-primary)}
+.swatch{width:27px;height:27px;display:block;border-radius:9px}.swatch.ocean{background:linear-gradient(140deg,#267ad8,#33b9f4)}.swatch.forest{background:linear-gradient(140deg,#167d66,#29d9a0)}.swatch.violet{background:linear-gradient(140deg,#754bd9,#b18aff)}.swatch.custom{background:conic-gradient(#b18aff,#25c3dd,#27d999,#eeb85c,#b18aff)}
+.custom-color-row{display:flex;gap:18px;margin-top:12px}.custom-color-row[hidden]{display:none}.custom-color-row label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}.custom-color-row input{width:40px;height:30px;border:1px solid var(--border);border-radius:6px;padding:2px;background:var(--panel)}
+@media(max-width:570px){.palette-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

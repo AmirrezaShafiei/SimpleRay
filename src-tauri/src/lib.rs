@@ -89,6 +89,17 @@ fn get_autostart_enabled()->Result<bool,String>{preferences::startup_enabled()}
 #[tauri::command]
 fn set_autostart_enabled(enabled:bool)->Result<bool,String>{preferences::set_startup_enabled(enabled)}
 #[tauri::command]
+fn hide_quick_panel(app:AppHandle)->Result<(),String>{
+    let window=app.get_webview_window("quick").ok_or("Quick switch is unavailable")?;
+    window.hide().map_err(|_|"Unable to hide Quick Switch".to_string())
+}
+#[tauri::command]
+fn quick_selection_changed(app:AppHandle)->Result<(),String>{
+    let main=app.get_webview_window("main").ok_or("Main window unavailable")?;
+    main.eval("window.dispatchEvent(new Event('simpleray:quick-server-change'))")
+        .map_err(|_|"Cannot synchronize main window".to_string())
+}
+#[tauri::command]
 fn show_main_window(app:AppHandle)->Result<(),String>{
     let window=app.get_webview_window("main").ok_or("Main window unavailable")?;
     window.show().map_err(|_|"Cannot show SimpleRay".to_string())
@@ -136,7 +147,7 @@ pub fn run(){
             connect_server,disconnect_server,connection_status,restore_system_proxy,
             ping_active_connection,measure_server_latency,
             configure_server_switching,accept_server_suggestion,undo_server_switch,
-            get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window
+            get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window,hide_quick_panel,quick_selection_changed
         ])
         .on_window_event(tray::handle_window_event)
         .build(tauri::generate_context!())

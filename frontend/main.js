@@ -3,18 +3,21 @@ import {parseImport,parseShareLink} from './config.js';
 import {createRepository} from './store.js';
 import {outboundFromShareLink} from './xray-config.js';
 import {bytesPerSecond,pingPool} from './runtime.js';
+import {readAppearance,applyAppearance} from './appearance.js';
+import {STORAGE_KEY} from './store.js';
 const $=id=>document.getElementById(id);
 const KEY='simpleray.phase1.preferences.v1';
 const safeLoad=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch{return {}}};
 const pref=safeLoad();
-const repo=createRepository(localStorage);
+let repo=createRepository(localStorage);
+const appearance=readAppearance(localStorage);
 const switching={
   mode:['off','suggest','automatic'].includes(pref.switchMode)?pref.switchMode:'off',
   source:typeof pref.switchSource==='string'?pref.switchSource:'favorites'
 };
 let lastSwitchConfig;
 let configUpdate=Promise.resolve();
-const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:['dark','light','system'].includes(pref.theme)?pref.theme:'system',pingSamples:pref.pingSamples===1?1:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:appearance.mode,palette:appearance.palette,customPrimary:appearance.primary,customAccent:appearance.accent,pingSamples:pref.pingPreferenceVersion===2&&[1,2,3].includes(pref.pingSamples)?pref.pingSamples:pref.pingSamples===1?1:2,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -94,12 +97,18 @@ async function changeDesktopSetting(field,value){
   finally{desktop.loading=false;renderDesktopSettings()}
 }
 
-function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,pingSamples:state.pingSamples,switchMode:switching.mode,switchSource:switching.source}))}catch{toast('Unable to save preferences')}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,palette:state.palette,customPrimary:state.customPrimary,customAccent:state.customAccent,pingSamples:state.pingSamples,pingPreferenceVersion:2,switchMode:switching.mode,switchSource:switching.source}))}catch{toast('Unable to save preferences')}}
 function toast(message){const el=$('toast');el.textContent=String(message);el.classList.add('visible');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('visible'),3800)}
 function errorMessage(e){return e instanceof Error?e.message:String(e||'Operation failed')}
 function safeAction(fn){try{return fn()}catch(e){toast(errorMessage(e));return null}}
 function resolvedTheme(){return state.theme==='system'?(window.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark'):state.theme}
-function applyTheme(){document.documentElement.dataset.theme=resolvedTheme();$('themeSelect').value=state.theme}
+function applyTheme(){
+ applyAppearance(document.documentElement,{mode:state.theme,palette:state.palette,primary:state.customPrimary,accent:state.customAccent},window.matchMedia?.('(prefers-color-scheme: light)').matches);
+ $('appearanceModeSelect').value=state.theme;
+ $('customPrimary').value=state.customPrimary;$('customAccent').value=state.customAccent;
+ $('customColorRow').hidden=state.palette!=='custom';
+ document.querySelectorAll('[data-palette-option]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.paletteOption===state.palette)));
+}
 function sync(){
   const db=repo.snapshot();
   state.servers=repo.rows();
@@ -357,7 +366,7 @@ function render(){renderTable()}
 function toggleFavorite(id){if(safeAction(()=>repo.toggleFavorite(id)))sync()}
 function closeContextMenu(){$('contextMenu').hidden=true;state.contextId=null}
 function addMenuButton(parent,iconName,label,action,{disabled=false,danger=false}={}){const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.className='menu-button'+(danger?' menu-danger':'');button.disabled=disabled;const iconSpan=document.createElement('span');iconSpan.className='menu-icon';iconSpan.innerHTML=icon(iconName);const txt=document.createElement('span');txt.textContent=label;button.append(iconSpan,txt);if(!disabled)button.addEventListener('click',()=>{closeContextMenu();action()});parent.append(button);return button}
-function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});addMenuButton(menu,'activity','Ping (×1)',()=>void pingServers([s],1));addMenuButton(menu,'activity','Ping (×3) — Average',()=>void pingServers([s],3));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
+function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});addMenuButton(menu,'activity','Ping (×1)',()=>void pingServers([s],1));addMenuButton(menu,'activity','Ping (×2) — Average',()=>void pingServers([s],2));addMenuButton(menu,'activity','Ping (×3) — Average',()=>void pingServers([s],3));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
 function closePasteMenu(){$('pasteMenu').hidden=true;$('pasteMenuButton').setAttribute('aria-expanded','false')}
 function showDialog(id){const target=$(id);for(const dialog of document.querySelectorAll('dialog[open]')){if(dialog!==target)dialog.close()}if(!target.open)target.showModal()}
 function confirmAction(title,description,acceptLabel='Delete',keepLabel=null){return new Promise(resolve=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmDescription').textContent=description;$('confirmAccept').textContent=acceptLabel;$('confirmKeep').hidden=!keepLabel;if(keepLabel)$('confirmKeep').textContent=keepLabel;let done=false;const finish=result=>{if(done)return;done=true;dialog.close();dialog.removeEventListener('close',cancel);$('confirmCancel').removeEventListener('click',onCancel);$('confirmClose').removeEventListener('click',onCancel);$('confirmAccept').removeEventListener('click',onYes);$('confirmKeep').removeEventListener('click',onKeep);resolve(result)};const cancel=()=>finish(false),onCancel=()=>finish(false),onYes=()=>finish(true),onKeep=()=>finish('keep');dialog.addEventListener('close',cancel);$('confirmCancel').addEventListener('click',onCancel);$('confirmClose').addEventListener('click',onCancel);$('confirmAccept').addEventListener('click',onYes);$('confirmKeep').addEventListener('click',onKeep);showDialog('confirmDialog')})}
@@ -441,8 +450,12 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   window.addEventListener('simpleray:exit-blocked',()=>toast('Cannot exit safely: System Proxy restoration failed. Restore Windows proxy settings before forcing exit.'));
   $('settingsClose').addEventListener('click',()=>$('settingsDialog').close());
   for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close());
-  $('themeSelect').addEventListener('change',e=>{state.theme=e.target.value;applyTheme();persist()});
-  $('pingSamples').addEventListener('change',e=>{state.pingSamples=Number(e.target.value)===1?1:3;persist();toast(`Ping All: ${state.pingSamples} real-delay probe${state.pingSamples===1?'':'s'} per server`)});
+  $('appearanceModeSelect').addEventListener('change',e=>{state.theme=e.target.value;applyTheme();persist()});
+  document.querySelectorAll('[data-palette-option]').forEach(button=>button.addEventListener('click',()=>{state.palette=button.dataset.paletteOption;applyTheme();persist()}));
+  for(const id of ['customPrimary','customAccent'])$(id).addEventListener('input',e=>{state[id]=e.target.value;applyTheme();persist()});
+  $('pingSamples').addEventListener('change',e=>{state.pingSamples=[1,2,3].includes(Number(e.target.value))?Number(e.target.value):2;persist();toast(`Ping All: ${state.pingSamples} real-delay probe${state.pingSamples===1?'':'s'} per server`)});
+  window.addEventListener('simpleray:quick-server-change',()=>{repo=createRepository(localStorage);sync();void refreshConnectionStatus({silent:true})});
+  window.addEventListener('storage',e=>{if(e.key===STORAGE_KEY){repo=createRepository(localStorage);sync();void refreshConnectionStatus({silent:true})}if(e.key===KEY){const a=readAppearance(localStorage);Object.assign(state,{theme:a.mode,palette:a.palette,customPrimary:a.primary,customAccent:a.accent});applyTheme()}});
   document.addEventListener('click',e=>{if(!e.target.closest('#contextMenu'))closeContextMenu();if(!e.target.closest('.paste-group'))closePasteMenu()});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeContextMenu();closePasteMenu()}});
   window.addEventListener('resize',closeContextMenu);

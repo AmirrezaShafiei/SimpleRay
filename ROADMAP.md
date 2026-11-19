@@ -82,3 +82,10 @@ TUN, split tunneling, elaborate rules editor, browser extension, a left sidebar,
 - Windows GitHub Actions run: [44382246461](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44382246461). **Installer must not be declared available until actual successful workflow and release asset are verified.**
 - Still open: Windows native runtime/real-server/manual tray QA, unsigned installer trust warning, plaintext user secrets in WebView storage requiring encrypted persistence before general public release.
 - User-requested phase implementation source is delivered; the project remains **beta-validation pending**, not production-ready.
+
+## Post-beta update: version 0.5.0-beta.5 (2026-11-19)
+- [x] Implement Quick Switch Tray popup and native Suggest-mode notification when main window is hidden.
+- [x] Add three palettes plus Custom primary/accent with separate Light/Dark/System brightness selection.
+- [x] Change Ping All default to 2, preserve 1/2/3 options and per-server x2 action.
+- [ ] Verify Windows GitHub Actions build and UI behavior on an actual Windows desktop before considering release final.
+- [ ] Manual acceptance: observe a real Suggest candidate with app hidden, dismiss via focus loss, switch through quick popup, and verify no repeated interruptions.
