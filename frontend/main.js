@@ -8,6 +8,12 @@ const KEY='simpleray.phase1.preferences.v1';
 const safeLoad=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch{return {}}};
 const pref=safeLoad();
 const repo=createRepository(localStorage);
+const switching={
+  mode:['off','suggest','automatic'].includes(pref.switchMode)?pref.switchMode:'off',
+  source:typeof pref.switchSource==='string'?pref.switchSource:'favorites'
+};
+let lastSwitchConfig;
+let configUpdate=Promise.resolve();
 const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:['dark','light','system'].includes(pref.theme)?pref.theme:'system',pingSamples:pref.pingSamples===1?1:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
@@ -16,7 +22,7 @@ let toastTimeout;
 let connectionPoll;
 let connectionRevision=0;
 let activePing;
-let activeLatency;
+
 
 function icon(name){
   return `<svg class="ui-icon" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
@@ -88,13 +94,53 @@ async function changeDesktopSetting(field,value){
   finally{desktop.loading=false;renderDesktopSettings()}
 }
 
-function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,pingSamples:state.pingSamples}))}catch{toast('Unable to save theme or Ping preferences')}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,pingSamples:state.pingSamples,switchMode:switching.mode,switchSource:switching.source}))}catch{toast('Unable to save preferences')}}
 function toast(message){const el=$('toast');el.textContent=String(message);el.classList.add('visible');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('visible'),3800)}
 function errorMessage(e){return e instanceof Error?e.message:String(e||'Operation failed')}
 function safeAction(fn){try{return fn()}catch(e){toast(errorMessage(e));return null}}
 function resolvedTheme(){return state.theme==='system'?(window.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark'):state.theme}
 function applyTheme(){document.documentElement.dataset.theme=resolvedTheme();$('themeSelect').value=state.theme}
-function sync(){const db=repo.snapshot();state.servers=repo.rows();state.selected=db.selectedId;render();renderSubscriptionList()}
+function sync(){
+  const db=repo.snapshot();
+  state.servers=repo.rows();
+  state.selected=db.selectedId;
+  render();
+  renderSubscriptionList();
+  renderSwitchSettings(db.subscriptions);
+  void updateSwitchConfig().catch(error=>toast(errorMessage(error)));
+}
+function renderSwitchSettings(subscriptions=repo.snapshot().subscriptions){
+  $('switchMode').value=switching.mode;
+  $('switchMode').disabled=!nativeHost();
+  $('switchSourceRow').hidden=switching.mode==='off';
+  const select=$('switchSource');
+  select.replaceChildren(new window.Option('Favorites','favorites'));
+  for(const sub of subscriptions)select.add(new window.Option(sub.name,`subscription:${sub.id}`));
+  if(![...select.options].some(option=>option.value===switching.source)){
+    select.add(new window.Option('Unavailable subscription',switching.source));
+  }
+  select.value=switching.source;
+}
+function updateSwitchConfig(){
+  if(!nativeHost())return Promise.resolve();
+  const candidates=[];
+  if(switching.mode!=='off'){
+    for(const server of state.servers){
+      if(switching.source==='favorites'?!server.favorite:switching.source!==`subscription:${server.subscriptionId}`)continue;
+      try{candidates.push({serverId:server.id,outbound:outboundFromShareLink(server.uri)})}catch{continue}
+      if(candidates.length===5)break;
+    }
+  }
+  const config={mode:switching.mode,candidates};
+  const key=JSON.stringify(config);
+  if(lastSwitchConfig===key)return configUpdate;
+  lastSwitchConfig=key;
+  configUpdate=configUpdate.catch(()=>{}).then(()=>nativeInvoke('configure_server_switching',config)).catch(error=>{
+    if(lastSwitchConfig===key)lastSwitchConfig=undefined;
+    throw error;
+  });
+  return configUpdate;
+}
 function getSelected(){return state.servers.find(s=>s.id===state.selected)||null}
 function serverRow(id){return $('serverRows').querySelector(`[data-id="${CSS.escape(String(id))}"]`)}
 function setSelected(id){
@@ -112,25 +158,33 @@ function nativeHost(){return Boolean(window.__TAURI_INTERNALS__?.invoke)}
 function renderConnection(){
   const c=state.connection;
   const connected=c.state==='connected';
-  const active=connected?state.servers.find(s=>s.id===c.serverId)||null:null;
-  const server=connected?active:getSelected();
-  const disabled=!nativeHost()||state.connectionBusy||(!connected&&!server);
+  const health=c.health;
+  const session=connected||health?.recovering;
+  const active=session?state.servers.find(s=>s.id===c.serverId)||null:null;
+  const server=session?active:getSelected();
+  const disabled=!nativeHost()||state.connectionBusy||(!session&&!server);
   $('connectionSwitch').disabled=Boolean(disabled);
-  $('connectionSwitch').setAttribute('aria-checked',String(connected));
-  $('connectionSwitch').setAttribute('aria-label',connected?'Disconnect':'Connect');
-  const status=state.connectionBusy||(connected?(c.systemProxy?'Connected':'System Proxy off'):'Disconnected');
+  $('connectionSwitch').setAttribute('aria-checked',String(Boolean(session)));
+  $('connectionSwitch').setAttribute('aria-label',session?'Disconnect':'Connect');
+  const unhealthy=(health?.consecutiveFailures??0)>=2;
+  const status=state.connectionBusy||(unhealthy&&session?'Server not responding':connected?'Connected':'Disconnected');
   $('connectionState').textContent=status;
   $('stateLed').title=state.connectionBusy||status;
-  $('stateLed').classList.toggle('proxy-off',connected&&!c.systemProxy);
-  $('selectedText').textContent=server?`${server.name} · ${server.type}`:connected?'Current connection':'No server selected';
-  const result=connected&&activeLatency?.serverId===c.serverId?activeLatency:null;
-  const ms=connected?(result?result.ms:c.initialLatencyMs):server?.latency;
+  $('stateLed').classList.toggle('proxy-off',connected&&(!c.systemProxy||unhealthy));
+  $('selectedText').textContent=server?`${server.name} · ${server.type}`:session?'Current connection':'No server selected';
+  const ms=session?(health?.attempts?health.latencyMs:c.initialLatencyMs):server?.latency;
   const pinging=connected&&activePing?.revision===connectionRevision;
-  $('latencyLabel').textContent=connected?'Live latency':'Latency';
-  const latencyText=pinging?'Testing…':result?.error?'No reply':Number.isFinite(ms)?`${ms} ms`:'—';
+  const failed=session&&health?.attempts&&!Number.isFinite(ms);
+  $('latencyLabel').textContent=session?'Live latency':'Latency';
+  const latencyText=pinging?'Testing…':failed?'No reply':Number.isFinite(ms)?`${ms} ms`:'—';
   if($('selectedLatency').textContent!==latencyText)$('selectedLatency').textContent=latencyText;
-  $('selectedLatency').className=result?.error?'live-ping-failed':latencyClass(ms);
-  $('selectedLatency').title=result?.error||'';
+  $('selectedLatency').className=failed?'live-ping-failed':latencyClass(ms);
+  const stability=$('connectionStability');
+  stability.hidden=!session||!health?.attempts;
+  if(!stability.hidden){
+    const seconds=health.measuredAtMs?Math.max(0,Math.floor((Date.now()-health.measuredAtMs)/1000)):null;
+    stability.textContent=`${health.successes}/${health.attempts} answered${seconds===null?'':` · ${seconds}s ago`}`;
+  }
   $('activePingButton').hidden=!connected;
   $('activePingButton').disabled=Boolean(pinging||state.connectionBusy);
   $('activePingButton').setAttribute('aria-busy',String(pinging));
@@ -138,14 +192,49 @@ function renderConnection(){
   $('downRate').textContent=c.trafficAvailable?bytesPerSecond(c.downloadBps):'—';
   $('upRate').textContent=c.trafficAvailable?bytesPerSecond(c.uploadBps):'—';
   $('connectionSwitch').closest('.connection-panel').classList.toggle('no-servers',!server);
-  $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected);
+  $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected&&!unhealthy&&c.systemProxy);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('connecting',Boolean(state.connectionBusy));
-  $('footerConnection').lastChild.textContent=connected&&!state.connectionBusy&&c.systemProxy?' Connected · System Proxy':` ${status}`;
-  $('systemProxyStatus').textContent=connected?(c.systemProxy?'Active':'Off'):'Auto with connection';
-  $('systemProxyStatus').dataset.state=connected?(c.systemProxy?'active':'off'):'automatic';
+  $('footerConnection').lastChild.textContent=` ${status}`;
+  $('systemProxyStatus').textContent=session?(c.systemProxy?'Active':'Off'):'Auto with connection';
+  $('systemProxyStatus').dataset.state=session?(c.systemProxy?'active':'off'):'automatic';
   $('repairProxyButton').hidden=!connected||c.systemProxy;
   $('repairProxyButton').disabled=Boolean(state.connectionBusy);
+  renderSwitchNotice(session?health:null);
 }
+function renderSwitchNotice(health){
+  const suggestion=switching.mode==='suggest'?health?.suggestion:null;
+  const switched=health?.switched;
+  const decision=suggestion??switched;
+  const server=decision&&state.servers.find(item=>item.id===decision.serverId);
+  const name=server?.name??'the selected server';
+  let message='';
+  if(decision){
+    const title=switched?`Switched to ${name}`:`Try ${name}`;
+    const reason=decision.reason==='recovery'?'current server did not respond':
+      `${decision.previousMs-decision.candidateMs} ms faster`;
+    message=`${title} · ${reason}`;
+  }else if(health?.switching)message='Verifying new connection…';
+  else if(health?.checking)message='Checking selected servers…';
+  else if(health?.waiting)message='No usable switch yet. Trying again after a pause.';
+  else if(health?.noCandidates)message='Select favorites or a subscription with another server to switch.';
+  $('switchNotice').hidden=!message;
+  if($('switchMessage').textContent!==message)$('switchMessage').textContent=message;
+  const apply=$('applySuggestion');
+  apply.hidden=!suggestion;
+  apply.disabled=Boolean(state.connectionBusy);
+  const undo=$('undoSwitch');
+  undo.hidden=!health?.canUndo;
+  undo.disabled=Boolean(state.connectionBusy);
+}
+function applyConnectionStatus(current){
+  const previous=state.connection;
+  state.connection=current;
+  if(current.state==='connected'&&current.serverId!==previous.serverId&&current.health?.switched){
+    setSelected(current.serverId);
+  }
+  if(current.error&&current.error!==previous.error)toast(current.error);
+}
+
 async function refreshConnectionStatus({silent=false}={}){
   if(!nativeHost()||state.connectionBusy||connectionPoll)return;
   const revision=connectionRevision;
@@ -153,10 +242,7 @@ async function refreshConnectionStatus({silent=false}={}){
     connectionPoll=nativeInvoke('connection_status');
     const current=await connectionPoll;
     if(revision!==connectionRevision)return;
-    const previous=state.connection;
-    state.connection=current;
-    if(current.serverId!==previous.serverId)activeLatency=null;
-    if(state.connection.error&&state.connection.error!==previous.error)toast(state.connection.error);
+    applyConnectionStatus(current);
     renderConnection();
   }catch(err){if(!silent&&revision===connectionRevision)toast(errorMessage(err));}
   finally{connectionPoll=null}
@@ -172,7 +258,6 @@ async function connectSelected(id=state.selected){
   try{
     const outbound=outboundFromShareLink(server.uri);
     state.connection=await nativeInvoke('connect_server',{serverId:id,outbound});
-    activeLatency=null;
     toast('Connected · Windows System Proxy is active');
   }catch(err){toast(errorMessage(err))}
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
@@ -181,12 +266,12 @@ async function disconnectConnection(){
   if(!nativeHost()||state.connectionBusy)return;
   connectionRevision++;
   state.connectionBusy='Disconnecting…';renderConnection();
-  try{state.connection=await nativeInvoke('disconnect_server');activeLatency=null;toast('Disconnected');}
+  try{state.connection=await nativeInvoke('disconnect_server');toast('Disconnected');}
   catch(err){toast(errorMessage(err))}
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
 async function toggleConnection(){
-  if(state.connection.state==='connected')await disconnectConnection();
+  if(state.connection.state==='connected'||state.connection.health?.recovering)await disconnectConnection();
   else await connectSelected();
 }
 async function restoreSystemProxy(){
@@ -205,17 +290,32 @@ async function testActiveConnection(){
   const request={serverId:state.connection.serverId,revision:connectionRevision};
   activePing=request;
   renderConnection();
-  const stillActive=()=>request.revision===connectionRevision&&state.connection.serverId===request.serverId;
   try{
-    const ms=await nativeInvoke('ping_active_connection',{serverId:request.serverId});
-    if(stillActive())activeLatency={serverId:request.serverId,ms};
+    await nativeInvoke('ping_active_connection',{serverId:request.serverId});
   }catch(error){
-    if(stillActive())activeLatency={serverId:request.serverId,error:errorMessage(error)};
+    if(request.revision===connectionRevision&&state.connection.serverId===request.serverId
+      && errorMessage(error)==='Live latency test already running')toast(errorMessage(error));
   }finally{
     if(activePing===request)activePing=null;
     renderConnection();
+    await refreshConnectionStatus({silent:true});
   }
 }
+async function respondToSwitch(undo){
+  if(state.connectionBusy)return;
+  const suggestion=state.connection.health?.suggestion;
+  if(undo?!state.connection.health?.canUndo:!suggestion)return;
+  connectionRevision++;
+  state.connectionBusy=undo?'Returning…':'Switching…';
+  renderConnection();
+  try{
+    state.connection=await (undo?nativeInvoke('undo_server_switch'):
+      nativeInvoke('accept_server_suggestion',{serverId:suggestion.serverId}));
+    setSelected(state.connection.serverId);
+  }catch(error){toast(errorMessage(error))}
+  finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
+}
+
 async function pingServers(servers,samples){
   if(!nativeHost()){toast('Real latency testing requires the native app and Xray-core');return}
   if(state.pingBusy){toast('A latency test is already running');return}
@@ -299,7 +399,7 @@ async function importClipboard(){let text;try{text=await readClipboardText()}cat
 }
 function init(){if(nativeHost())document.documentElement.classList.add('native-host');applyTheme();$('pingSamples').value=String(state.pingSamples);sync();if(repo.loadError)toast(repo.loadError);
   if(!nativeHost()){$('phaseStatus').textContent='Browser preview';$('runtimeNotice').textContent='Real connection and Ping require the Windows desktop host';}
-  else{initWindowChrome();void refreshConnectionStatus({silent:true}).then(()=>readDesktopSettings());setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
+  else{initWindowChrome();void refreshConnectionStatus({silent:true}).then(()=>configUpdate.catch(()=>{})).then(()=>readDesktopSettings());setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
   renderDesktopSettings();
   window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(state.theme==='system')applyTheme()});
   document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'?'desc':'asc'}render()}));
@@ -307,6 +407,17 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   $('connectionSwitch').addEventListener('click',()=>void toggleConnection());
   $('activePingButton').addEventListener('click',()=>void testActiveConnection());
   $('repairProxyButton').addEventListener('click',()=>void restoreSystemProxy());
+  $('applySuggestion').addEventListener('click',()=>void respondToSwitch(false));
+  $('undoSwitch').addEventListener('click',()=>void respondToSwitch(true));
+  for(const [id,field] of [['switchMode','mode'],['switchSource','source']]){
+    $(id).addEventListener('change',event=>{
+      switching[field]=event.target.value;
+      persist();
+      renderSwitchSettings();
+      renderConnection();
+      void updateSwitchConfig().catch(error=>toast(errorMessage(error)));
+    });
+  }
   $('selectedServer').addEventListener('click',()=>{const row=serverRow(state.connection.serverId??state.selected);row?.scrollIntoView({block:'nearest',behavior:'smooth'});row?.focus()});
   $('pasteButton').addEventListener('click',importClipboard);
   $('pasteMenuButton').addEventListener('click',()=>{const menu=$('pasteMenu');menu.hidden=!menu.hidden;$('pasteMenuButton').setAttribute('aria-expanded',String(!menu.hidden))});
