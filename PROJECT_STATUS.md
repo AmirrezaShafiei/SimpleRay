@@ -43,3 +43,9 @@ Real remote subscriptions and server profiles, interactive tray behavior, Window
 
 ## Update — 2026-11-19, 0.5.0-beta.5 candidate
 User requested (1) nonintrusive Suggest popup while in Tray, with manual quick server switch, (2) Ocean/Forest/Violet + Custom color palettes independent of Light/Dark/System brightness, and (3) default Ping All x2 average. Source implemented on feature/tray-suggest-palettes-ping2; tests/quick-palette-ping.test.mjs added. Windows CI and manual Suggest/Quick Switch QA are still required. The previous 0.5.0-beta.4 Windows CI had a successful run; do not confuse earlier failed beta.1 run with current status. Keep existing switch modes Off/Suggest/Automatic. The new popup **does not** automatically change server in Suggest mode.
+
+### beta.5 verified CI result (2026-11-19)
+- Merged PR [#3](https://github.com/AmirrezaShafiei/SimpleRay/pull/3) to main, merge commit `5c90a802c5048ab01e02634f3889f619c125d8c9`.
+- Windows Actions run [44448631002](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44448631002): **SUCCESS**. JavaScript tests, source checks, pinned Xray verification, Rust compile+tests, Windows System Proxy verification, NSIS installer build, installation/startup smoke, and prerelease publication succeeded.
+- Released [v0.5.0-beta.5](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.5) as an **unsigned** Windows beta; installer `SimpleRay_0.5.0-beta.5_x64-setup.exe` and SHA256SUMS are attached.
+- Still unverified: actual interactive Suggest popup and quick switching on user's Windows setup, live VLESS/VMess/Trojan/Shadowsocks servers, multi-monitor focus/position quirks, encryption-at-rest. Smoke test is not proof of those behaviors.
