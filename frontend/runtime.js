@@ -1,4 +1,6 @@
 /** Shared connection/ping view logic. Pure functions make UI behavior testable. */
+export const DEFAULT_PING_SAMPLES=2;
+
 export function formatBytes(value){
   if(!Number.isFinite(value)||value<0)return '—';
   if(value<1024)return `${Math.round(value)} B`;

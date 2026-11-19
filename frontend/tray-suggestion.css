@@ -1,0 +1,15 @@
+.tray-popup {margin:0;overflow:hidden;background:var(--panel);color:var(--text)}
+.suggestion-card {height:100vh;padding:13px 14px 10px;display:grid;grid-template-rows:auto 1fr auto;border:1px solid var(--border);border-top:3px solid var(--selectedBorder);background:linear-gradient(120deg,var(--panel2),var(--panel) 70%)}
+.suggestion-card header {display:flex;align-items:center;gap:10px}
+.suggestion-app-mark {display:grid;place-items:center;flex:none;width:35px;height:35px;border-radius:8px;background:var(--selected);color:var(--blue)}
+.suggestion-app-mark svg {width:20px;height:20px}
+.suggestion-heading {flex:1;min-width:0}
+.suggestion-heading p {margin:0 0 4px;font-size:10px;color:var(--muted);font-weight:600;line-height:1.2}
+.suggestion-heading h1 {margin:0;font-size:15px;font-weight:650;line-height:1.25;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
+.suggestion-close {align-self:flex-start;border:0;border-radius:5px;background:none;color:var(--muted);width:28px;height:27px;font-size:22px;line-height:1}
+.suggestion-close:hover {background:var(--selected);color:var(--text)}
+.suggestion-details {margin:8px 0 0;color:var(--muted);font-size:11px;line-height:1.35}
+.suggestion-details[data-state=error] {color:var(--red)}
+.suggestion-details[data-state=success] {color:var(--green)}
+.suggestion-card footer {display:flex;justify-content:flex-end;align-items:center}
+.suggestion-card .dialog-action {min-height:29px}

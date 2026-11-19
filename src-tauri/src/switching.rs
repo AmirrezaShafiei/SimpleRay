@@ -22,6 +22,8 @@ pub enum SwitchMode {
 pub struct Profile {
     pub server_id: String,
     pub outbound: Value,
+    #[serde(default)]
+    pub display_name: String,
 }
 
 #[derive(Default)]
@@ -56,6 +58,24 @@ pub struct SwitchDecision {
     pub previous_ms: Option<u64>,
     pub candidate_ms: u64,
     pub reason: SwitchReason,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraySuggestion {
+    pub generation: u64,
+    pub revision: u64,
+    pub name: String,
+    pub decision: SwitchDecision,
+}
+
+impl TraySuggestion {
+    pub fn same_offer(&self, other: &Self)->bool {
+        self.generation==other.generation
+            && self.revision==other.revision
+            && self.decision.server_id==other.decision.server_id
+            && self.decision.reason==other.decision.reason
+    }
 }
 
 #[derive(Default)]

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SimpleRay suggestion</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./tray-suggestion.css">
+  <script type="module" src="./tray-suggestion.js"></script>
+</head>
+<body class="tray-popup">
+  <main class="suggestion-card" hidden>
+    <header>
+      <span class="suggestion-app-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m17 3 4 4-4 4m4-4H8a4 4 0 0 0 0 8m-1 6-4-4 4-4m-4 4h13a4 4 0 0 0 4-4"/></svg>
+      </span>
+      <div class="suggestion-heading">
+        <p>SimpleRay · Switch suggestion</p>
+        <h1 id="suggestionName"></h1>
+      </div>
+      <button type="button" id="suggestionClose" class="suggestion-close" aria-label="Dismiss" title="Dismiss">×</button>
+    </header>
+    <p id="suggestionDetails" class="suggestion-details" aria-live="polite"></p>
+    <footer><button type="button" id="suggestionSwitch" class="dialog-action primary">Switch server</button></footer>
+  </main>
+</body>
+</html>

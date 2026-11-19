@@ -234,7 +234,7 @@ async fn kill(mut core:StartedXray){
 impl EngineManager {
     pub async fn connect(&self,app:&AppHandle,server_id:String,outbound:Value)->Result<ConnectionStatus,String>{
         if server_id.is_empty()||server_id.len()>256{return Err("Invalid selected server ID".into())}
-        self.change_connection(app,Profile{server_id,outbound},ConnectionChange::Manual,None).await
+        self.change_connection(app,Profile{server_id,outbound,display_name:String::new()},ConnectionChange::Manual,None).await
     }
 
     async fn change_connection(
@@ -334,15 +334,36 @@ impl EngineManager {
         Ok(())
     }
 
-    pub async fn accept_switch(&self,app:&AppHandle,server_id:&str)->Result<ConnectionStatus,String>{
+    pub async fn tray_suggestion(&self)->Option<switching::TraySuggestion> {
+        let runtime=self.runtime.lock().await;
+        let monitor=&runtime.monitor;
+        if runtime.pending || monitor.mode!=SwitchMode::Suggest {return None;}
+        let (decision,expires)=monitor.suggestion.as_ref()?;
+        if Instant::now()>=*expires {return None;}
+        let profile=monitor.candidates.iter().find(|profile|profile.server_id==decision.server_id)?;
+        Some(switching::TraySuggestion{
+            generation:runtime.generation,
+            revision:monitor.revision,
+            name:profile.display_name.clone(),
+            decision:decision.clone(),
+        })
+    }
+
+    pub async fn accept_switch(
+        &self,app:&AppHandle,server_id:&str,expected:Option<(u64,u64)>,
+    )->Result<ConnectionStatus,String>{
         let (profile,decision,version) = {
             let runtime=self.runtime.lock().await;
+            let version=(runtime.generation,runtime.monitor.revision);
+            if expected.is_some_and(|expected|expected!=version) {
+                return Err("That suggestion has expired".into());
+            }
             let (decision, _) = runtime.monitor.suggestion.as_ref().filter(|(decision,expires)| {
                 runtime.monitor.mode==SwitchMode::Suggest && decision.server_id==server_id && Instant::now()<*expires
             }).ok_or("That suggestion has expired")?;
             let profile=runtime.monitor.candidates.iter().find(|p|p.server_id==server_id).cloned()
                 .ok_or("That server is no longer selected for monitoring")?;
-            (profile,decision.clone(),(runtime.generation,runtime.monitor.revision))
+            (profile,decision.clone(),version)
         };
         self.change_connection(app,profile,ConnectionChange::Suggested(decision),Some(version)).await
     }

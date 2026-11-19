@@ -94,7 +94,17 @@ async fn configure_server_switching(manager:State<'_,EngineManager>,mode:switchi
 }
 #[tauri::command]
 async fn accept_server_suggestion(app:AppHandle,manager:State<'_,EngineManager>,server_id:String)->Result<ConnectionStatus,String>{
-    manager.accept_switch(&app,&server_id).await
+    manager.accept_switch(&app,&server_id,None).await
+}
+#[tauri::command]
+fn dismiss_tray_suggestion(window:tauri::WebviewWindow)->Result<(),String>{
+    tray::dismiss_suggestion(&window)
+}
+#[tauri::command]
+async fn accept_tray_suggestion(
+    app:AppHandle,window:tauri::WebviewWindow,server_id:String,generation:u64,revision:u64,
+)->Result<(),String>{
+    tray::accept_suggestion(&app,&window,&server_id,generation,revision).await
 }
 #[tauri::command]
 async fn undo_server_switch(app:AppHandle,manager:State<'_,EngineManager>)->Result<ConnectionStatus,String>{
@@ -149,6 +159,10 @@ pub fn run(){
             tauri::async_runtime::spawn(async move {
                 handle.state::<EngineManager>().monitor_candidates(&handle).await;
             });
+            let handle=app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tray::monitor_suggestions(&handle).await;
+            });
             if !std::env::args().any(|arg|arg=="--minimized") {
                 tray::show_main(app.handle());
             }
@@ -160,6 +174,7 @@ pub fn run(){
             connect_server,disconnect_server,connection_status,restore_system_proxy,
             ping_active_connection,measure_server_latency,
             configure_server_switching,accept_server_suggestion,undo_server_switch,
+            dismiss_tray_suggestion,accept_tray_suggestion,
             get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window
         ])
         .on_window_event(tray::handle_window_event)

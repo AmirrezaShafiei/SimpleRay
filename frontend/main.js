@@ -2,14 +2,12 @@ import {filterServers,sortServers,latencyClass,stabilityLevel,SORT_COLUMNS} from
 import {parseImport,parseShareLink} from './config.js';
 import {createRepository} from './store.js';
 import {outboundFromShareLink} from './xray-config.js';
-import {bytesPerSecond,formatBytes,normalizedLatencyResult,pingPool} from './runtime.js';
+import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,normalizedLatencyResult,pingPool} from './runtime.js';
 import {displayServerName,renderFlag} from './flags.js';
 import {phoneTransferControls} from './phone-transfer.js';
-import {THEME_MODES,THEME_COLORS,themeColor,customScheme} from './theme.js';
+import {APPEARANCE_KEY,THEME_COLORS,paintAppearance,restoreAppearance,savedPreferences,themeColor} from './theme.js';
 const $=id=>document.getElementById(id);
-const KEY='simpleray.phase1.preferences.v1';
-const safeLoad=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch{return {}}};
-const pref=safeLoad();
+const pref=savedPreferences(localStorage);
 const repo=createRepository(localStorage);
 const switching={
   mode:['off','suggest','automatic'].includes(pref.switchMode)?pref.switchMode:'off',
@@ -17,7 +15,7 @@ const switching={
 };
 let lastSwitchConfig;
 let configUpdate=Promise.resolve();
-const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:THEME_MODES.includes(pref.theme)?pref.theme:'system',themePrimary:themeColor(pref.themePrimary,THEME_COLORS.primary),themeAccent:themeColor(pref.themeAccent,THEME_COLORS.accent),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -98,23 +96,15 @@ async function changeDesktopSetting(field,value){
   finally{desktop.loading=false;renderDesktopSettings()}
 }
 
-function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,themePrimary:state.themePrimary,themeAccent:state.themeAccent,pingSamples:state.pingSamples,switchMode:switching.mode,switchSource:switching.source}))}catch{toast('Unable to save preferences')}}
+function persist(){try{localStorage.setItem(APPEARANCE_KEY,JSON.stringify({palette:state.palette,appearance:state.appearance,themePrimary:state.themePrimary,themeAccent:state.themeAccent,pingSamples:state.pingSamples,switchMode:switching.mode,switchSource:switching.source}))}catch{toast('Unable to save preferences')}}
 function toast(message){const el=$('toast');el.textContent=String(message);el.classList.add('visible');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('visible'),3800)}
 function errorMessage(e){return e instanceof Error?e.message:String(e||'Operation failed')}
 function safeAction(fn){try{return fn()}catch(e){toast(errorMessage(e));return null}}
-function resolvedTheme(){
-  if(state.theme==='system')return window.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';
-  return state.theme==='custom'?customScheme(state.themePrimary):state.theme;
-}
 function applyTheme(){
-  const root=document.documentElement;
-  const custom=state.theme==='custom';
-  root.dataset.theme=resolvedTheme();
-  root.dataset.customTheme=String(custom);
-  root.style.setProperty('--custom-primary',state.themePrimary);
-  root.style.setProperty('--custom-accent',state.themeAccent);
-  $('themeSelect').value=state.theme;
-  $('themeColors').hidden=!custom;
+  paintAppearance(document.documentElement,state,window.matchMedia?.('(prefers-color-scheme: light)')?.matches);
+  $('themeSelect').value=state.palette;
+  $('appearanceSelect').value=state.appearance;
+  $('themeColors').hidden=state.palette!=='custom';
   $('primaryColor').value=state.themePrimary;
   $('accentColor').value=state.themeAccent;
 }
@@ -145,7 +135,7 @@ function updateSwitchConfig(){
   if(switching.mode!=='off'){
     for(const server of state.servers){
       if(switching.source==='favorites'?!server.favorite:switching.source!==`subscription:${server.subscriptionId}`)continue;
-      try{candidates.push({serverId:server.id,outbound:outboundFromShareLink(server.uri)})}catch{continue}
+      try{candidates.push({serverId:server.id,displayName:displayServerName(server),outbound:outboundFromShareLink(server.uri)})}catch{continue}
       if(candidates.length===5)break;
     }
   }
@@ -457,7 +447,7 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   if(!nativeHost()){$('phaseStatus').textContent='Browser preview';$('runtimeNotice').textContent='Real connection and Ping require the Windows desktop host';}
   else{initWindowChrome();void refreshConnectionStatus({silent:true}).then(()=>configUpdate.catch(()=>{})).then(()=>readDesktopSettings());setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
   renderDesktopSettings();
-  window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(state.theme==='system')applyTheme()});
+  window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(state.appearance==='system')applyTheme()});
   document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'?'desc':'asc'}render()}));
   $('searchInput').addEventListener('input',e=>{state.query=e.target.value;render()});
   $('connectionSwitch').addEventListener('click',()=>void toggleConnection());
@@ -514,10 +504,21 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   $('trayToggle').addEventListener('change',e=>void changeDesktopSetting('minimizeToTray',e.target.checked));
   $('autoConnectToggle').addEventListener('change',e=>void changeDesktopSetting('autoConnect',e.target.checked));
   window.addEventListener('simpleray:tray-toggle',()=>void toggleConnection());
+  window.addEventListener('simpleray:tray-switched',event=>{
+    connectionRevision++;
+    if(state.servers.some(server=>server.id===event.detail))setSelected(event.detail);
+    void refreshConnectionStatus({silent:true});
+  });
   window.addEventListener('simpleray:exit-blocked',()=>toast('Cannot exit safely: System Proxy restoration failed. Restore Windows proxy settings before forcing exit.'));
   $('settingsClose').addEventListener('click',()=>$('settingsDialog').close());
   for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close());
-  $('themeSelect').addEventListener('change',e=>{state.theme=e.target.value;applyTheme();persist()});
+  for(const [id,field] of [['themeSelect','palette'],['appearanceSelect','appearance']]){
+    $(id).addEventListener('change',event=>{
+      state[field]=event.target.value;
+      applyTheme();
+      persist();
+    });
+  }
   for(const [id,field,fallback] of [
     ['primaryColor','themePrimary',THEME_COLORS.primary],
     ['accentColor','themeAccent',THEME_COLORS.accent]
