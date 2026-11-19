@@ -25,12 +25,14 @@ pub struct ConnectionStatus {
     pub download_bps:f64,
     pub upload_bps:f64,
     pub traffic_available:bool,
+    pub download_bytes:Option<u64>,
+    pub upload_bytes:Option<u64>,
     pub initial_latency_ms:Option<u64>,
     pub error:Option<String>,
     pub health:HealthStatus,
 }
 impl ConnectionStatus {
-    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,download_bps:0.,upload_bps:0.,traffic_available:false,initial_latency_ms:None,error,health:HealthStatus::default()}}
+    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,download_bps:0.,upload_bps:0.,traffic_available:false,download_bytes:None,upload_bytes:None,initial_latency_ms:None,error,health:HealthStatus::default()}}
 }
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -47,11 +49,24 @@ struct StartedXray {
     proxy_port:u16,
     api_port:Option<u16>,
 }
+#[derive(Clone, Copy, Default)]
+struct TrafficBytes {
+    up: u64,
+    down: u64,
+}
+impl TrafficBytes {
+    fn since(self, baseline: Self) -> Self {
+        Self { up: self.up.saturating_sub(baseline.up), down: self.down.saturating_sub(baseline.down) }
+    }
+}
 struct Active {
     core:StartedXray,
     server_id:String,
     backup:ProxyBackup,
     last_poll:Instant,
+    traffic_origin:TrafficBytes,
+    last_traffic:TrafficBytes,
+    last_traffic_at:Instant,
     download_bps:f64,
     upload_bps:f64,
     traffic_available:bool,
@@ -256,6 +271,11 @@ impl EngineManager {
                 };
                 if !valid { return Err("The latest test no longer qualifies for switching".into()); }
             }
+            // Read a starting point before enabling System Proxy for the new core.
+            let traffic_origin=match new_core.api_port {
+                Some(port)=>query_traffic(app,port).await.unwrap_or_default(),
+                None=>TrafficBytes::default(),
+            };
             let backup=if let Some(active)=runtime.active.as_ref() {
                 let mut snapshot=active.backup.clone();
                 system_proxy::switch(app,&mut snapshot,active.core.proxy_port,new_core.proxy_port)?;
@@ -268,6 +288,7 @@ impl EngineManager {
             let now=Instant::now();
             runtime.active=Some(Active{
                 core:new_core,server_id:profile.server_id.clone(),backup,last_poll:now,
+                traffic_origin,last_traffic:traffic_origin,last_traffic_at:now,
                 download_bps:0.,upload_bps:0.,traffic_available:false,system_proxy:true,initial_latency_ms,
             });
             runtime.last_error=None;
@@ -397,9 +418,12 @@ impl EngineManager {
         let mut health=session.monitor.view(recovering,Instant::now());
         health.switching=session.pending && session.monitor.wanted.is_some();
         if let Some(active)=&session.active{
+            let transferred=active.core.api_port.map(|_|active.last_traffic.since(active.traffic_origin));
             Ok(ConnectionStatus{state:"connected".into(),server_id:Some(active.server_id.clone()),
                 system_proxy:active.system_proxy,download_bps:active.download_bps,upload_bps:active.upload_bps,
-                traffic_available:active.traffic_available,initial_latency_ms:Some(active.initial_latency_ms),health,
+                traffic_available:active.traffic_available,
+                download_bytes:transferred.map(|bytes|bytes.down),upload_bytes:transferred.map(|bytes|bytes.up),
+                initial_latency_ms:Some(active.initial_latency_ms),health,
                 error:(!active.system_proxy).then(||"Windows System Proxy is off. Restore it to route Windows traffic.".into())})
         }else{
             let mut status=ConnectionStatus::off(session.last_error.clone());
@@ -413,14 +437,17 @@ impl EngineManager {
         Self::reap_core(app,&mut runtime).await;
         if let Some(active)=runtime.active.as_mut(){
             if active.last_poll.elapsed()>=Duration::from_millis(900){
-                let elapsed=active.last_poll.elapsed().as_secs_f64().max(0.001);
                 active.last_poll=Instant::now();
                 active.system_proxy=matches!(system_proxy::is_active(active.core.proxy_port),Ok(true));
                 if let Some(api_port)=active.core.api_port{
                     match query_traffic(app,api_port).await{
-                        Ok((up,down))=>{
-                            active.upload_bps=up as f64/elapsed;
-                            active.download_bps=down as f64/elapsed;
+                        Ok(totals)=>{
+                            let elapsed=active.last_traffic_at.elapsed().as_secs_f64().max(0.001);
+                            let delta=totals.since(active.last_traffic);
+                            active.upload_bps=delta.up as f64/elapsed;
+                            active.download_bps=delta.down as f64/elapsed;
+                            active.last_traffic=totals;
+                            active.last_traffic_at=Instant::now();
                             active.traffic_available=true;
                         },
                         Err(_)=>{active.traffic_available=false;}
@@ -555,7 +582,7 @@ impl EngineManager {
 
     pub async fn shutdown(&self,app:&AppHandle){let _=self.disconnect(app).await;}
 }
-async fn query_traffic(app:&AppHandle,port:u16)->Result<(u64,u64),String>{
+async fn query_traffic(app:&AppHandle,port:u16)->Result<TrafficBytes,String>{
     let xray=locate_xray(app)?;
     let mut command=Command::new(xray);
     #[cfg(target_os="windows")]
@@ -563,7 +590,7 @@ async fn query_traffic(app:&AppHandle,port:u16)->Result<(u64,u64),String>{
     command.arg("api").arg("statsquery")
         .arg(format!("--server=127.0.0.1:{port}"))
         .arg("--pattern=inbound>>>proxy-in>>>traffic")
-        .arg("--reset=true")
+        .arg("--reset=false")
         .kill_on_drop(true).stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let output=timeout(Duration::from_secs(3),command.output()).await
@@ -571,14 +598,14 @@ async fn query_traffic(app:&AppHandle,port:u16)->Result<(u64,u64),String>{
         .map_err(|_|"Statistics query failed")?;
     if !output.status.success(){return Err("Xray statistics API unavailable".into())}
     let parsed:Value=serde_json::from_slice(&output.stdout).map_err(|_|"Invalid statistics API response")?;
-    let mut up=0u64;let mut down=0u64;
+    let mut traffic=TrafficBytes::default();
     for stat in parsed.get("stat").and_then(Value::as_array).ok_or("Missing statistics")? {
         let name=stat.get("name").and_then(Value::as_str).unwrap_or("");
         let count=stat.get("value").and_then(|v|v.as_str().and_then(|s|s.parse::<u64>().ok()).or_else(||v.as_u64())).unwrap_or(0);
-        if name=="inbound>>>proxy-in>>>traffic>>>uplink"{up=up.saturating_add(count)}
-        if name=="inbound>>>proxy-in>>>traffic>>>downlink"{down=down.saturating_add(count)}
+        if name=="inbound>>>proxy-in>>>traffic>>>uplink"{traffic.up=traffic.up.saturating_add(count)}
+        if name=="inbound>>>proxy-in>>>traffic>>>downlink"{traffic.down=traffic.down.saturating_add(count)}
     }
-    Ok((up,down))
+    Ok(traffic)
 }
 pub async fn ping_server(app:&AppHandle,outbound:Value,samples:u8)->Result<LatencyResult,String>{
     if samples!=1 && samples!=3{return Err("Ping measurements must be 1 or 3".into())}

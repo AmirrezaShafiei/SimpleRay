@@ -15,9 +15,11 @@ export function filterServers(servers,query='') {
   return servers.filter(s=>[s.name,s.type,s.source].some(v=>String(v).toLocaleLowerCase().includes(term)));
 }
 export function sortServers(servers,key,direction='asc') {
-  if(!SORT_COLUMNS.includes(key))return [...servers];
   const sign=direction==='desc'?-1:1;
   return servers.map((server,i)=>({server,i})).sort((a,b)=>{
+    const pinOrder=Number(Boolean(b.server.pinned))-Number(Boolean(a.server.pinned));
+    if(pinOrder)return pinOrder;
+    if(!SORT_COLUMNS.includes(key))return a.i-b.i;
     const av=a.server[key],bv=b.server[key];
     if(key==='latency'){
       const am=typeof av!=='number'||!Number.isFinite(av),bm=typeof bv!=='number'||!Number.isFinite(bv);
@@ -33,8 +35,17 @@ export function sortServers(servers,key,direction='asc') {
 }
 export function latencyClass(value){
   if(typeof value!=='number'||!Number.isFinite(value))return 'latency-unknown';
-  if(value<100)return 'latency-good';
-  if(value<180)return 'latency-ok';
-  if(value<270)return 'latency-slow';
+  if(value<=200)return 'latency-good';
+  if(value<=400)return 'latency-ok';
+  if(value<=800)return 'latency-slow';
   return 'latency-bad';
+}
+
+export function stabilityLevel(successes,attempts){
+  if(!Number.isFinite(successes)||!Number.isFinite(attempts)||attempts<=0)return 'unknown';
+  const ratio=successes/attempts;
+  if(ratio>=0.9)return 'stable';
+  if(ratio>=0.7)return 'fair';
+  if(ratio>=0.4)return 'unstable';
+  return 'poor';
 }

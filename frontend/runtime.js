@@ -1,10 +1,14 @@
 /** Shared connection/ping view logic. Pure functions make UI behavior testable. */
-export function bytesPerSecond(value){
+export function formatBytes(value){
   if(!Number.isFinite(value)||value<0)return '—';
-  if(value<1024)return `${Math.round(value)} B/s`;
-  const units=['KB/s','MB/s','GB/s','TB/s'];let x=value/1024,i=0;
+  if(value<1024)return `${Math.round(value)} B`;
+  const units=['KB','MB','GB','TB'];let x=value/1024,i=0;
   while(x>=1024&&i<units.length-1){x/=1024;i++}
   return `${x.toFixed(x>=100?0:x>=10?1:2)} ${units[i]}`;
+}
+export function bytesPerSecond(value){
+  const amount=formatBytes(value);
+  return amount==='—'?amount:`${amount}/s`;
 }
 export function normalizedLatencyResult(result,samples){
   const attempted=Number(result?.attempted)||samples;

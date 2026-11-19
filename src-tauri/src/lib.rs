@@ -6,15 +6,33 @@ mod preferences;
 mod tray;
 mod engine;
 mod switching;
+mod phone_transfer;
 use engine::{EngineManager,ConnectionStatus,LatencyResult};
 use preferences::{DesktopPreferences,DesktopSettings};
 use tray::ExitGuard;
+use phone_transfer::{Invite, PhoneTransfer, Receipt};
 const MAX_SUBSCRIPTION_BYTES:usize=2_000_000;
 
 #[tauri::command]
 fn read_clipboard_text()->Result<String,String>{
     let mut clipboard=arboard::Clipboard::new().map_err(|_|"Clipboard is unavailable")?;
     clipboard.get_text().map_err(|_|"Clipboard contains no readable text".into())
+}
+#[tauri::command]
+fn phone_transfer_addresses() -> Result<Vec<String>, String> {
+    phone_transfer::addresses()
+}
+#[tauri::command]
+async fn start_phone_transfer(receiver: State<'_, PhoneTransfer>, address: String) -> Result<Invite, String> {
+    receiver.start(address).await
+}
+#[tauri::command]
+fn poll_phone_transfer(receiver: State<'_, PhoneTransfer>, id: String) -> Result<Receipt, String> {
+    receiver.poll(&id)
+}
+#[tauri::command]
+fn cancel_phone_transfer(receiver: State<'_, PhoneTransfer>, id: String) -> Result<(), String> {
+    receiver.cancel(&id)
 }
 #[tauri::command]
 async fn fetch_subscription_text(url:String)->Result<String,String>{
@@ -106,6 +124,7 @@ pub fn run(){
     builder
         .manage(EngineManager::default())
         .manage(ExitGuard::default())
+        .manage(PhoneTransfer::default())
         .setup(|app|{
             // If a previous session crashed while System Proxy was enabled, restore its prior settings.
             // An unrecoverable record blocks proxy takeover instead of overwriting unknown user settings.
@@ -133,6 +152,7 @@ pub fn run(){
         })
         .invoke_handler(tauri::generate_handler![
             read_clipboard_text,fetch_subscription_text,
+            phone_transfer_addresses,start_phone_transfer,poll_phone_transfer,cancel_phone_transfer,
             connect_server,disconnect_server,connection_status,restore_system_proxy,
             ping_active_connection,measure_server_latency,
             configure_server_switching,accept_server_suggestion,undo_server_switch,

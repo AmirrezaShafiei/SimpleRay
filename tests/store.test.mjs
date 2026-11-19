@@ -55,3 +55,39 @@ test('corrupt storage is not automatically overwritten',()=>{
  assert.ok(a.loadError);assert.throws(()=>a.addSubscription('Daily','https://example.com/sub'),/read-only/);
  assert.equal(storage.getItem(STORAGE_KEY),'{bad-json');
 });
+
+test('three pins persist and follow subscription entries across refresh',()=>{
+ const storage=memory(),a=repository(storage);
+ a.importManual(['a','b','c'].map(name=>line(name+'.test')).join('\n'));
+ const sub=a.addSubscription('Daily','https://example.com/sub');
+ a.refreshSubscription(sub.id,line('d.test'));
+ const [first,second,third,subscribed]=a.rows();
+ for(const row of [first,second,subscribed])a.togglePin(row.id);
+ assert.throws(()=>a.togglePin(third.id),/Up to 3/);
+ a.refreshSubscription(sub.id,line('d.test','Renamed'));
+ assert.equal(repository(storage).rows().find(row=>row.id===subscribed.id).pinned,true);
+ a.togglePin(first.id);
+ a.togglePin(third.id);
+ assert.equal(a.rows().filter(row=>row.pinned).length,3);
+});
+
+test('phone import reuses a renamed or reordered subscription configuration and preserves the record',()=>{
+ const a=repository(),sub=a.addSubscription('Daily','https://example.com/sub');
+ const original=`vless://${uuid}@a.test:443?security=tls&type=ws&path=%2Ftest#Old`;
+ a.refreshSubscription(sub.id,original);
+ const [{id}]=a.rows();
+ a.togglePin(id);
+ a.setLatency(id,{latency:301,latencyStatus:'ok',latencySuccess:3,latencyAttempted:3});
+ const before=a.snapshot();
+ const received=a.receiveFromPhone(`vless://${uuid}@a.test:443?path=%2Ftest&type=ws&security=tls#New`);
+ assert.equal(received.id,id);
+ assert.equal(received.duplicate,true);
+ assert.deepEqual(a.snapshot(),before);
+
+ const distinct=a.receiveFromPhone(original.replace('%2Ftest','%2Fother'));
+ assert.equal(distinct.duplicate,false);
+ assert.notEqual(distinct.id,id);
+ assert.equal(a.rows().length,2);
+ assert.throws(()=>a.receiveFromPhone('https://example.com/sub'));
+ assert.equal(a.rows().length,2);
+});

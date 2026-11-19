@@ -1,8 +1,11 @@
-import {filterServers,sortServers,latencyClass,SORT_COLUMNS} from './model.js';
+import {filterServers,sortServers,latencyClass,stabilityLevel,SORT_COLUMNS} from './model.js';
 import {parseImport,parseShareLink} from './config.js';
 import {createRepository} from './store.js';
 import {outboundFromShareLink} from './xray-config.js';
-import {bytesPerSecond,pingPool} from './runtime.js';
+import {bytesPerSecond,formatBytes,normalizedLatencyResult,pingPool} from './runtime.js';
+import {displayServerName,renderFlag} from './flags.js';
+import {phoneTransferControls} from './phone-transfer.js';
+import {THEME_MODES,THEME_COLORS,themeColor,customScheme} from './theme.js';
 const $=id=>document.getElementById(id);
 const KEY='simpleray.phase1.preferences.v1';
 const safeLoad=()=>{try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch{return {}}};
@@ -14,7 +17,7 @@ const switching={
 };
 let lastSwitchConfig;
 let configUpdate=Promise.resolve();
-const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:['dark','light','system'].includes(pref.theme)?pref.theme:'system',pingSamples:pref.pingSamples===1?1:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',theme:THEME_MODES.includes(pref.theme)?pref.theme:'system',themePrimary:themeColor(pref.themePrimary,THEME_COLORS.primary),themeAccent:themeColor(pref.themeAccent,THEME_COLORS.accent),pingSamples:pref.pingSamples===1?1:3,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -94,12 +97,26 @@ async function changeDesktopSetting(field,value){
   finally{desktop.loading=false;renderDesktopSettings()}
 }
 
-function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,pingSamples:state.pingSamples,switchMode:switching.mode,switchSource:switching.source}))}catch{toast('Unable to save preferences')}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify({theme:state.theme,themePrimary:state.themePrimary,themeAccent:state.themeAccent,pingSamples:state.pingSamples,switchMode:switching.mode,switchSource:switching.source}))}catch{toast('Unable to save preferences')}}
 function toast(message){const el=$('toast');el.textContent=String(message);el.classList.add('visible');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('visible'),3800)}
 function errorMessage(e){return e instanceof Error?e.message:String(e||'Operation failed')}
 function safeAction(fn){try{return fn()}catch(e){toast(errorMessage(e));return null}}
-function resolvedTheme(){return state.theme==='system'?(window.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark'):state.theme}
-function applyTheme(){document.documentElement.dataset.theme=resolvedTheme();$('themeSelect').value=state.theme}
+function resolvedTheme(){
+  if(state.theme==='system')return window.matchMedia?.('(prefers-color-scheme: light)').matches?'light':'dark';
+  return state.theme==='custom'?customScheme(state.themePrimary):state.theme;
+}
+function applyTheme(){
+  const root=document.documentElement;
+  const custom=state.theme==='custom';
+  root.dataset.theme=resolvedTheme();
+  root.dataset.customTheme=String(custom);
+  root.style.setProperty('--custom-primary',state.themePrimary);
+  root.style.setProperty('--custom-accent',state.themeAccent);
+  $('themeSelect').value=state.theme;
+  $('themeColors').hidden=!custom;
+  $('primaryColor').value=state.themePrimary;
+  $('accentColor').value=state.themeAccent;
+}
 function sync(){
   const db=repo.snapshot();
   state.servers=repo.rows();
@@ -171,7 +188,8 @@ function renderConnection(){
   $('connectionState').textContent=status;
   $('stateLed').title=state.connectionBusy||status;
   $('stateLed').classList.toggle('proxy-off',connected&&(!c.systemProxy||unhealthy));
-  $('selectedText').textContent=server?`${server.name} · ${server.type}`:session?'Current connection':'No server selected';
+  renderFlag($('selectedFlag'),server,icon('globe'));
+  $('selectedText').textContent=server?`${displayServerName(server)} · ${server.type}`:session?'Current connection':'No server selected';
   const ms=session?(health?.attempts?health.latencyMs:c.initialLatencyMs):server?.latency;
   const pinging=connected&&activePing?.revision===connectionRevision;
   const failed=session&&health?.attempts&&!Number.isFinite(ms);
@@ -181,6 +199,7 @@ function renderConnection(){
   $('selectedLatency').className=failed?'live-ping-failed':latencyClass(ms);
   const stability=$('connectionStability');
   stability.hidden=!session||!health?.attempts;
+  stability.dataset.level=stabilityLevel(health?.successes,health?.attempts);
   if(!stability.hidden){
     const seconds=health.measuredAtMs?Math.max(0,Math.floor((Date.now()-health.measuredAtMs)/1000)):null;
     stability.textContent=`${health.successes}/${health.attempts} answered${seconds===null?'':` · ${seconds}s ago`}`;
@@ -191,6 +210,9 @@ function renderConnection(){
   $('traffic').hidden=!connected;
   $('downRate').textContent=c.trafficAvailable?bytesPerSecond(c.downloadBps):'—';
   $('upRate').textContent=c.trafficAvailable?bytesPerSecond(c.uploadBps):'—';
+  for(const [element,total] of [['downTotal',c.downloadBytes],['upTotal',c.uploadBytes]]){
+    $(element).textContent=Number.isFinite(total)?`${formatBytes(total)} total`:'—';
+  }
   $('connectionSwitch').closest('.connection-panel').classList.toggle('no-servers',!server);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected&&!unhealthy&&c.systemProxy);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('connecting',Boolean(state.connectionBusy));
@@ -341,23 +363,31 @@ async function pingServers(servers,samples){
 }
 
 function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').innerHTML=icon(active?(state.sortDirection==='asc'?'up':'down'):'sort');btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
-function orderedRows(){const rows=filterServers(state.servers,state.query);return state.sortKey?sortServers(rows,state.sortKey,state.sortDirection):rows}
+function orderedRows(){const rows=filterServers(state.servers,state.query);return sortServers(rows,state.sortKey,state.sortDirection)}
 function renderTable(){const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
-    const starCell=tr.insertCell();const star=document.createElement('button');star.className='star'+(s.favorite?' is-favorite':'');star.innerHTML=icon('star');star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);star.addEventListener('click',e=>{e.stopPropagation();toggleFavorite(s.id)});starCell.append(star);
-    const nameCell=tr.insertCell();const wrap=document.createElement('div');wrap.className='name-cell';const flag=document.createElement('span');flag.className='flag';if(s.flag&&s.flag!=='🌐')flag.textContent=s.flag;else flag.innerHTML=icon('globe');const name=document.createElement('span');name.className='server-name';name.textContent=s.name;wrap.append(flag,name);nameCell.append(wrap);
+    const starCell=tr.insertCell();
+    const actions=document.createElement('div');actions.className='row-actions';
+    const star=document.createElement('button');star.type='button';star.className='star'+(s.favorite?' is-favorite':'');star.innerHTML=icon('star');star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);
+    const pin=document.createElement('button');pin.type='button';pin.className='pin-button';pin.innerHTML=icon('pin');pin.title=s.pinned?'Unpin server':'Pin server';pin.setAttribute('aria-label',`${s.pinned?'Unpin':'Pin'} ${s.name}`);pin.setAttribute('aria-pressed',String(Boolean(s.pinned)));
+    star.addEventListener('click',e=>{e.stopPropagation();toggleFavorite(s.id)});
+    pin.addEventListener('click',e=>{e.stopPropagation();togglePin(s.id)});
+    actions.addEventListener('dblclick',e=>e.stopPropagation());
+    actions.append(star,pin);starCell.append(actions);
+    const nameCell=tr.insertCell();const wrap=document.createElement('div');wrap.className='name-cell';const flag=document.createElement('span');flag.className='flag';renderFlag(flag,s,icon('globe'));const name=document.createElement('span');name.className='server-name';name.textContent=displayServerName(s);wrap.append(flag,name);nameCell.append(wrap);
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
     const latencyCell=tr.insertCell();const latency=document.createElement('span');latency.className='latency-text '+latencyClass(s.latency);latency.textContent=typeof s.latency==='number'?`${s.latency}`:s.latencyStatus==='timeout'?'Timeout':s.latencyStatus==='error'?'Failed':'—';latency.title=s.latencyAttempted?`${s.latencySuccess||0}/${s.latencyAttempted} successful real-delay probes`: 'Not measured';latencyCell.append(latency);
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
     tr.addEventListener('click',()=>setSelected(s.id));tr.addEventListener('dblclick',()=>{setSelected(s.id);void connectSelected(s.id)});
     tr.addEventListener('contextmenu',e=>{e.preventDefault();setSelected(s.id);showContextMenu(s.id,e.clientX,e.clientY)});
     tr.addEventListener('keydown',e=>{if(e.target!==tr)return;if(e.key==='Enter'){e.preventDefault();setSelected(s.id);void connectSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();setSelected(s.id);const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
-  if(focusedId){const row=serverRow(focusedId);const control=focused.matches('.star')?row?.querySelector('.star'):row;control?.focus({preventScroll:true})}
-  $('emptyMessage').hidden=rows.length!==0;$('sampleCount').textContent=`${rows.length} of ${state.servers.length} configurations`;renderSort();renderConnection()}
+  if(focusedId){const row=serverRow(focusedId);const control=focused.matches('.star')?row?.querySelector('.star'):focused.matches('.pin-button')?row?.querySelector('.pin-button'):row;control?.focus({preventScroll:true})}
+  $('emptyMessage').hidden=rows.length!==0;renderSort();renderConnection()}
 function render(){renderTable()}
 function toggleFavorite(id){if(safeAction(()=>repo.toggleFavorite(id)))sync()}
+function togglePin(id){if(safeAction(()=>repo.togglePin(id)))sync()}
 function closeContextMenu(){$('contextMenu').hidden=true;state.contextId=null}
 function addMenuButton(parent,iconName,label,action,{disabled=false,danger=false}={}){const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.className='menu-button'+(danger?' menu-danger':'');button.disabled=disabled;const iconSpan=document.createElement('span');iconSpan.className='menu-icon';iconSpan.innerHTML=icon(iconName);const txt=document.createElement('span');txt.textContent=label;button.append(iconSpan,txt);if(!disabled)button.addEventListener('click',()=>{closeContextMenu();action()});parent.append(button);return button}
-function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});addMenuButton(menu,'activity','Ping (×1)',()=>void pingServers([s],1));addMenuButton(menu,'activity','Ping (×3) — Average',()=>void pingServers([s],3));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
+function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});addMenuButton(menu,'activity','Ping (×1)',()=>void pingServers([s],1));addMenuButton(menu,'activity','Ping (×3) — Average',()=>void pingServers([s],3));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'pin',s.pinned?'Unpin server':'Pin server',()=>togglePin(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
 function closePasteMenu(){$('pasteMenu').hidden=true;$('pasteMenuButton').setAttribute('aria-expanded','false')}
 function showDialog(id){const target=$(id);for(const dialog of document.querySelectorAll('dialog[open]')){if(dialog!==target)dialog.close()}if(!target.open)target.showModal()}
 function confirmAction(title,description,acceptLabel='Delete',keepLabel=null){return new Promise(resolve=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmDescription').textContent=description;$('confirmAccept').textContent=acceptLabel;$('confirmKeep').hidden=!keepLabel;if(keepLabel)$('confirmKeep').textContent=keepLabel;let done=false;const finish=result=>{if(done)return;done=true;dialog.close();dialog.removeEventListener('close',cancel);$('confirmCancel').removeEventListener('click',onCancel);$('confirmClose').removeEventListener('click',onCancel);$('confirmAccept').removeEventListener('click',onYes);$('confirmKeep').removeEventListener('click',onKeep);resolve(result)};const cancel=()=>finish(false),onCancel=()=>finish(false),onYes=()=>finish(true),onKeep=()=>finish('keep');dialog.addEventListener('close',cancel);$('confirmCancel').addEventListener('click',onCancel);$('confirmClose').addEventListener('click',onCancel);$('confirmAccept').addEventListener('click',onYes);$('confirmKeep').addEventListener('click',onKeep);showDialog('confirmDialog')})}
@@ -420,6 +450,26 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   }
   $('selectedServer').addEventListener('click',()=>{const row=serverRow(state.connection.serverId??state.selected);row?.scrollIntoView({block:'nearest',behavior:'smooth'});row?.focus()});
   $('pasteButton').addEventListener('click',importClipboard);
+  $('phoneTransferButton').disabled=!nativeHost();
+  phoneTransferControls({
+    invoke:nativeInvoke,showDialog,
+    onReceive(link){
+      const result=repo.receiveFromPhone(link);
+      sync();
+      return result;
+    },
+    async onTest({id,outbound}){
+      const before=state.servers.find(server=>server.id===id);
+      if(!before)return null;
+      const result=normalizedLatencyResult(await nativeInvoke('measure_server_latency',{outbound,samples:1}),1);
+      if(!state.servers.some(server=>server.id===id&&server.signature===before.signature))return null;
+      repo.setLatency(id,result);
+      state.servers=repo.rows();
+      render();
+      return result.latency;
+    },
+    onConnect(id){setSelected(id);void connectSelected(id)}
+  });
   $('pasteMenuButton').addEventListener('click',()=>{const menu=$('pasteMenu');menu.hidden=!menu.hidden;$('pasteMenuButton').setAttribute('aria-expanded',String(!menu.hidden))});
   $('manualAddButton').addEventListener('click',()=>openManualDialog());
   $('subscriptionAddButton').addEventListener('click',()=>openSubscriptionDialog());
@@ -442,6 +492,16 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   $('settingsClose').addEventListener('click',()=>$('settingsDialog').close());
   for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close());
   $('themeSelect').addEventListener('change',e=>{state.theme=e.target.value;applyTheme();persist()});
+  for(const [id,field,fallback] of [
+    ['primaryColor','themePrimary',THEME_COLORS.primary],
+    ['accentColor','themeAccent',THEME_COLORS.accent]
+  ]){
+    $(id).addEventListener('input',e=>{
+      state[field]=themeColor(e.target.value,fallback);
+      applyTheme();
+    });
+    $(id).addEventListener('change',persist);
+  }
   $('pingSamples').addEventListener('change',e=>{state.pingSamples=Number(e.target.value)===1?1:3;persist();toast(`Ping All: ${state.pingSamples} real-delay probe${state.pingSamples===1?'':'s'} per server`)});
   document.addEventListener('click',e=>{if(!e.target.closest('#contextMenu'))closeContextMenu();if(!e.target.closest('.paste-group'))closePasteMenu()});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeContextMenu();closePasteMenu()}});

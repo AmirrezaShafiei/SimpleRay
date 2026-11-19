@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {bytesPerSecond,normalizedLatencyResult,pingPool} from '../frontend/runtime.js';
+import {bytesPerSecond,formatBytes,normalizedLatencyResult,pingPool} from '../frontend/runtime.js';
 test('measured traffic display units, zero and unavailable',()=>{
   assert.equal(bytesPerSecond(0),'0 B/s');
   assert.equal(bytesPerSecond(2048),'2.00 KB/s');
   assert.equal(bytesPerSecond(1024**2),'1.00 MB/s');
   assert.equal(bytesPerSecond(NaN),'—');
+  assert.equal(formatBytes(1024**3 * 2),'2.00 GB');
+  assert.equal(formatBytes(0),'0 B');
 });
 test('three real delay sample average and partial success metadata',()=>{
   assert.deepEqual(normalizedLatencyResult({averageMs:110,successful:2,attempted:3},3),{

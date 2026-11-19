@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Send to SimpleRay</title>
+  <style>
+    :root { font: 16px system-ui, sans-serif; }
+    main { max-width: 30rem; margin: 7vh auto; padding: 1.35rem; }
+    h1 { font-size: 1.8rem; margin: 0; }
+    p { line-height: 1.55; margin: .7rem 0 1.35rem; }
+    form { display: grid; gap: .65rem; }
+    label { font-weight: 650; }
+    textarea, button { box-sizing: border-box; font: inherit; border-radius: .65rem; padding: .8rem; }
+    textarea { width: 100%; min-height: 7rem; resize: vertical; }
+    button { background: #1655a3; color: white; border: 0; font-weight: 700; min-height: 3rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Send to SimpleRay</h1>
+    <p>Copy a server’s share link from your VPN app and paste it below.</p>
+    <form method="post" autocomplete="off">
+      <label for="link">Share link</label>
+      <textarea id="link" name="link" maxlength="16384" placeholder="vless://…" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+      <button type="submit">Send to computer</button>
+    </form>
+  </main>
+</body>
+</html>

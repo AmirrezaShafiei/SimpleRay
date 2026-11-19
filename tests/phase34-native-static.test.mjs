@@ -14,7 +14,8 @@ test('native engine only reports Connected after live HTTPS through Xray and Sys
 });
 test('independent HTTP Ping through Xray with 1/3 samples and Xray stats',()=>{
   assert.match(rust,/async fn probe_once\(/);assert.match(rust,/samples!=1 && samples!=3/);
-  assert.match(rust,/statsquery/);assert.match(rust,/--reset=true/);
+  assert.match(rust,/statsquery/);assert.match(rust,/--reset=false/);
+  assert.match(rust,/active.last_traffic.since\(active.traffic_origin\)/);
   assert.match(main,/pingPool\(servers,samples/);
 });
 test('system proxy recovery snapshot and restoration, scoped to user registry',()=>{

@@ -1,17 +1,18 @@
 # SimpleRay — minimal Windows Xray client
 
-Single-window, no-sidebar V2Ray/Xray client with Dark/Light/System themes, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
+Single-window, no-sidebar V2Ray/Xray client with Light, Dark, System and Custom themes, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
 
-> **Status:** Version `0.5.0-beta.4` covers Phases 1–6. The Windows x64 installer and its SHA-256 checksum are attached to the private beta release after the Windows build and installation smoke test pass.
+> **Status:** Version `0.5.0-beta.5` adds local phone import, pinned servers, and session totals. The Windows x64 installer and its SHA-256 checksum are attached to the private beta release after the Windows build and installation smoke test pass.
 
 ## Features in source
 - Clipboard import of VMess, VLESS, Trojan, Shadowsocks, plus manually named subscriptions and update/rename/delete.
-- Table Source column is subscription name or `—`; numeric colored latency text without boxed badges; sort by clicking any header.
+- Click any table header to sort. Up to three pinned servers stay at the top. Flags come from the country code, name, or flag in the profile label.
 - Context-menu single-node Ping x1/x3; toolbar Ping All next to Update, default 3 HTTP-through-proxy tests averaged (Settings may select 1).
-- One switch for real connect/disconnect using official Xray-core; live traffic arrows appear only when connected; System Proxy on Windows.
+- One switch for real connect/disconnect using official Xray-core and Windows System Proxy. The connected panel shows live rates and the total bytes of the current session.
 - System Tray Show / Connect-Disconnect / Exit; closing window hides to tray by default; explicit Exit attempts System Proxy restoration before exit.
 - Start with Windows under HKCU user registry; separate Auto-connect option (OFF by default).
-- Consistent Dark/Light/System themes and a small gear Settings panel.
+- The Custom theme saves independent primary and accent colors in Settings.
+- **From phone** opens a temporary one-use QR on a private local network. Paste a share link into the phone browser. SimpleRay reuses an existing equivalent profile, tests it from the PC, and offers to connect after a successful test. Use a trusted Wi-Fi network or personal hotspot because the transfer uses local HTTP.
 
 ## Test source locally
 - `npm ci` — install locked Tauri CLI build dependencies

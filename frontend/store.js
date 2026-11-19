@@ -1,7 +1,9 @@
 import {parseShareLink,parseImport,parseSubscriptionPayload,validateSubscriptionUrl} from './config.js';
+import {outboundFromShareLink} from './xray-config.js';
 
 export const STORAGE_KEY='simpleray.configurations.v2';
 const VERSION=2;
+export const MAX_PINNED_SERVERS=3;
 const clone=value=>JSON.parse(JSON.stringify(value));
 const fresh=()=>({version:VERSION,servers:[],subscriptions:[],selectedId:null});
 function id(){return globalThis.crypto?.randomUUID?.()||`local-${Date.now()}-${Math.random().toString(36).slice(2)}`}
@@ -13,6 +15,14 @@ function sanitizedName(name,defaultName='Untitled'){
 function sourceOf(s,subscriptions){
   if(!s.subscriptionId)return '—';
   return subscriptions.find(x=>x.id===s.subscriptionId)?.name||'—';
+}
+function endpointKey(value) {
+  return JSON.stringify(value, (_key, child) => {
+    if (child && typeof child === 'object' && !Array.isArray(child)) {
+      return Object.fromEntries(Object.keys(child).sort().map(name => [name, child[name]]));
+    }
+    return child;
+  });
 }
 function checkDocument(value){
   if(!value||value.version!==VERSION||!Array.isArray(value.servers)||!Array.isArray(value.subscriptions))throw new Error('Invalid saved configuration database');
@@ -47,6 +57,34 @@ export function createRepository(storage,{idFactory=id}={}){
     snapshot,rows,
     setSelected(serverId){return transact(next=>{if(!next.servers.some(s=>s.id===serverId))throw new Error('Server not found');next.selectedId=serverId})},
     toggleFavorite(serverId){return transact(next=>{const s=next.servers.find(x=>x.id===serverId);if(!s)throw new Error('Server not found');s.favorite=!s.favorite})},
+    togglePin(serverId){
+      return transact(next=>{
+        const server=next.servers.find(row=>row.id===serverId);
+        if(!server)throw new Error('Server not found');
+        if(!server.pinned&&next.servers.filter(row=>row.pinned).length>=MAX_PINNED_SERVERS){
+          throw new Error('Up to 3 servers can be pinned. Unpin one first.');
+        }
+        server.pinned=!server.pinned;
+      });
+    },
+    receiveFromPhone(text){
+      const parsed=parseShareLink(text);
+      const outbound=outboundFromShareLink(parsed.uri);
+      const key=endpointKey(outbound);
+      const existing=database.servers.find(server=>{
+        if(server.type!==parsed.type||server.port!==parsed.port||server.host?.toLowerCase()!==parsed.host.toLowerCase())return false;
+        try{return endpointKey(outboundFromShareLink(server.uri))===key}
+        catch{return false}
+      });
+      // Receive the existing record as-is, including pins, source and test history.
+      if(existing)return {id:existing.id,duplicate:true,outbound};
+      const serverId=idFactory();
+      transact(next=>{
+        next.servers.push({...parsed,id:serverId,subscriptionId:null});
+        if(!next.selectedId)next.selectedId=serverId;
+      });
+      return {id:serverId,duplicate:false,outbound};
+    },
     setLatency(serverId,{latency,latencyStatus,latencySuccess,latencyAttempted}){
       if(latency!==null && (!Number.isInteger(latency)||latency<0||latency>999999))throw new Error('Invalid latency value');
       return transact(next=>{
@@ -74,13 +112,18 @@ export function createRepository(storage,{idFactory=id}={}){
         const s=next.servers.find(x=>x.id===serverId);if(!s)throw new Error('Server not found');
         if(s.subscriptionId)throw new Error('Subscription nodes cannot be edited directly; duplicate them as manual first');
         if(next.servers.some(x=>x.id!==serverId&&!x.subscriptionId&&x.uri===parsed.uri))throw new Error('This manual configuration already exists');
-        Object.assign(s,parsed,{id:serverId,name:sanitizedName(name,parsed.name),favorite:s.favorite,subscriptionId:null});
+        const displayName=sanitizedName(name,parsed.name);
+        if(s.signature===parsed.signature){
+          Object.assign(s,{uri:parsed.uri,name:displayName});
+        }else{
+          Object.assign(s,parsed,{name:displayName,favorite:s.favorite,latencyStatus:'unknown',latencySuccess:0,latencyAttempted:0});
+        }
       });
     },
     duplicateManual(serverId){
       return transact(next=>{
         const source=next.servers.find(s=>s.id===serverId);if(!source)throw new Error('Server not found');
-        const duplicate={...clone(source),id:idFactory(),name:sanitizedName(source.name)+' (copy)',favorite:false,subscriptionId:null,latency:null};
+        const duplicate={...clone(source),id:idFactory(),name:sanitizedName(source.name)+' (copy)',favorite:false,pinned:false,subscriptionId:null,latency:null,latencyStatus:'unknown',latencySuccess:0,latencyAttempted:0};
         next.servers.push(duplicate);next.selectedId=duplicate.id;
       });
     },
@@ -123,7 +166,7 @@ export function createRepository(storage,{idFactory=id}={}){
         for(const data of parsed.servers){
           if(subscription.hiddenSignatures.includes(data.signature)||imported.has(data.signature))continue;
           const old=existing.get(data.signature);
-          const server={...data,id:old?.id||idFactory(),subscriptionId,favorite:old?.favorite||false,latency:old?.latency??null,latencyStatus:old?.latencyStatus||'unknown',latencySuccess:old?.latencySuccess||0,latencyAttempted:old?.latencyAttempted||0};
+          const server={...data,id:old?.id||idFactory(),subscriptionId,favorite:old?.favorite||false,pinned:old?.pinned||false,latency:old?.latency??null,latencyStatus:old?.latencyStatus||'unknown',latencySuccess:old?.latencySuccess||0,latencyAttempted:old?.latencyAttempted||0};
           imported.set(data.signature,server);
           if(old)retained++;else added++;
         }
