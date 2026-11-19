@@ -33,7 +33,7 @@ async function change(id,accept=false){
  busy=true;message(accept?'Applying suggestion…':'Connecting…');render();
  try{
   status=accept?await invoke('accept_server_suggestion',{serverId:id}):await invoke('connect_server',{serverId:id,outbound:outboundFromShareLink(server.uri)});
-  createRepository(localStorage).setSelected(id);message('Connected to '+server.name);await invoke('hide_quick_panel');
+  createRepository(localStorage).setSelected(id);await invoke('quick_selection_changed');message('Connected to '+server.name);await invoke('hide_quick_panel');
  }catch(e){message(e?.message||String(e))}
  finally{busy=false;void refresh()}
 }

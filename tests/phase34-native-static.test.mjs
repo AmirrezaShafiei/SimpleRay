@@ -12,8 +12,8 @@ test('native engine only reports Connected after live HTTPS through Xray and Sys
   assert.match(rust,/StatusCode::NO_CONTENT/);
   assert.match(rust,/127\.0\.0\.1/);
 });
-test('independent HTTP Ping through Xray with 1/3 samples and Xray stats',()=>{
-  assert.match(rust,/async fn probe_once\(/);assert.match(rust,/samples!=1 && samples!=3/);
+test('independent HTTP Ping through Xray with 1/2/3 samples and Xray stats',()=>{
+  assert.match(rust,/async fn probe_once\(/);assert.match(rust,/\[1,2,3\]\.contains\(&samples\)/);
   assert.match(rust,/statsquery/);assert.match(rust,/--reset=true/);
   assert.match(main,/pingPool\(servers,samples/);
 });

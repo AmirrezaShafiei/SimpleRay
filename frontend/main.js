@@ -454,6 +454,7 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   document.querySelectorAll('[data-palette-option]').forEach(button=>button.addEventListener('click',()=>{state.palette=button.dataset.paletteOption;applyTheme();persist()}));
   for(const id of ['customPrimary','customAccent'])$(id).addEventListener('input',e=>{state[id]=e.target.value;applyTheme();persist()});
   $('pingSamples').addEventListener('change',e=>{state.pingSamples=[1,2,3].includes(Number(e.target.value))?Number(e.target.value):2;persist();toast(`Ping All: ${state.pingSamples} real-delay probe${state.pingSamples===1?'':'s'} per server`)});
+  window.addEventListener('simpleray:quick-server-change',()=>{repo=createRepository(localStorage);sync();void refreshConnectionStatus({silent:true})});
   window.addEventListener('storage',e=>{if(e.key===STORAGE_KEY){repo=createRepository(localStorage);sync();void refreshConnectionStatus({silent:true})}if(e.key===KEY){const a=readAppearance(localStorage);Object.assign(state,{theme:a.mode,palette:a.palette,customPrimary:a.primary,customAccent:a.accent});applyTheme()}});
   document.addEventListener('click',e=>{if(!e.target.closest('#contextMenu'))closeContextMenu();if(!e.target.closest('.paste-group'))closePasteMenu()});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeContextMenu();closePasteMenu()}});
