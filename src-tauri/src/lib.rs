@@ -160,11 +160,15 @@ fn copy_error_report(text:String)->Result<(),String>{
         .map_err(|_|"Unable to copy report to the clipboard".into())
 }
 #[tauri::command]
-async fn rename_active_server(app:AppHandle,manager:State<'_,EngineManager>,server_id:String,display_name:String){
-    manager.rename_active(&app,&server_id,display_name).await
+async fn rename_active_server(app:AppHandle,manager:State<'_,EngineManager>,server_id:String,display_name:String)->Result<(),String>{
+    manager.rename_active(&app,&server_id,display_name).await;
+    Ok(())
 }
 #[tauri::command]
-async fn cancel_network_recovery(manager:State<'_,EngineManager>){manager.cancel_recovery().await}
+async fn cancel_network_recovery(manager:State<'_,EngineManager>)->Result<(),String>{
+    manager.cancel_recovery().await;
+    Ok(())
+}
 
 #[cfg_attr(mobile,tauri::mobile_entry_point)]
 pub fn run(){

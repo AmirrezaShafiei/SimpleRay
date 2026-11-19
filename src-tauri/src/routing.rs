@@ -191,7 +191,7 @@ function Add-Protection($entry) {
   New-NetFirewallRule -Name $entry.name -DisplayName 'SimpleRay tunnel lock' -Group 'SimpleRay tunnel lock' -Direction Outbound -Program $entry.path -Action Block -Profile Any -LocalAddress @($settings.addresses | ForEach-Object { [string]$_ }) | Out-Null
 }
 try {
-  if ($settings.add -and (Get-NetFirewallProfile -PolicyStore ActiveStore | Where-Object { -not $_.Enabled })) {
+  if ($settings.add -and (Get-NetFirewallProfile -PolicyStore ActiveStore | Where-Object { $_.Enabled -ne 'True' })) {
     throw 'Windows Firewall profile disabled'
   }
   foreach ($entry in $settings.add) {
@@ -268,4 +268,45 @@ mod tests {
             assert!(normalized_domain(invalid).is_err(),"{invalid}");
         }
     }
+}
+
+#[cfg(all(test,windows))]
+#[test]
+#[ignore = "requires the staged Xray and Wintun runtime and an elevated Windows runner"]
+fn windows_tun_adapter_smoke() {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command,Stdio};
+    use std::time::{Duration,Instant};
+    let runtime=Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
+    let dir=tempfile::tempdir().expect("TUN smoke temp directory");
+    let config_path=dir.path().join("tun-smoke.json");
+    let mut value=json!({"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[
+        {"tag":"proxy","protocol":"freedom"}
+    ]});
+    let port=std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    config(&mut value,&Routing{mode:Mode::Tun,..Routing::default()},port);
+    let tun=&mut value["inbounds"][1]["settings"];
+    tun["name"]=json!("SimpleRayQATUN");
+    tun["gateway"]=json!(["198.19.240.1/30"]);
+    tun["dns"]=json!([]);
+    tun["autoSystemRoutingTable"]=json!(["198.19.240.0/30"]);
+    tun["autoSystemWfpBlockLeak"]=json!([]);
+    fs::write(&config_path,serde_json::to_vec(&value).unwrap()).unwrap();
+    let mut child=Command::new(runtime.join("xray.exe"))
+        .creation_flags(0x0800_0000)
+        .args(["run","-config"]).arg(&config_path)
+        .env("XRAY_LOCATION_ASSET",&runtime)
+        .stdin(Stdio::null()).stdout(Stdio::inherit()).stderr(Stdio::inherit())
+        .spawn().expect("start official Xray TUN smoke");
+    let deadline=Instant::now()+Duration::from_secs(12);
+    let test_ip:std::net::IpAddr="198.19.240.1".parse().unwrap();
+    let started=loop {
+        let adapter_ready=if_addrs::get_if_addrs().is_ok_and(|addresses|addresses.iter().any(|entry|entry.ip()==test_ip));
+        if adapter_ready && std::net::TcpStream::connect(("127.0.0.1",port)).is_ok() {break true}
+        if Instant::now()>=deadline || !matches!(child.try_wait(),Ok(None)) {break false}
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let _=child.kill();
+    let _=child.wait();
+    assert!(started,"Xray did not expose a healthy TUN adapter on Windows");
 }

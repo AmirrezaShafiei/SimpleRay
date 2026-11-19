@@ -80,6 +80,8 @@ jobs:
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Verify Windows System Proxy set and restore
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml wininet_system_proxy_round_trip -- --ignored
+      - name: Verify the Xray TUN adapter starts on Windows
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml windows_tun_adapter_smoke -- --ignored
       - name: Build Windows NSIS installer
         run: npm run desktop:build -- -- --locked
       - name: Verify installation and application startup
