@@ -194,3 +194,54 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 @media(max-width:400px){.phone-qr-panel{flex-direction:column;align-items:stretch}#phoneQr{align-self:center}}
 
 .latency-text[data-provisional=true]{text-decoration:underline dotted;text-underline-offset:3px}
+
+/* Appearance controls and action placement in the existing compact layout. */
+.appearance-settings{padding:5px 0 12px}
+.appearance-settings fieldset{min-width:0;border:0;padding:0;margin:0 0 12px}
+.appearance-settings legend{padding:0;margin-bottom:8px;font-weight:700;font-size:13px}
+.theme-choices,.appearance-choices{display:grid;gap:8px}
+.theme-choices{grid-template-columns:repeat(4,minmax(0,1fr))}
+.appearance-choices{grid-template-columns:repeat(3,minmax(0,1fr))}
+.theme-tile,.appearance-option{cursor:pointer;position:relative;border:1px solid var(--border);border-radius:9px;overflow:hidden;font-size:12px;text-align:center}
+.theme-tile{display:grid;gap:4px;padding:6px 5px 5px;justify-items:center}
+.theme-tile input,.appearance-option input{position:absolute;inset:0;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.theme-tile:has(input:checked),.appearance-option:has(input:checked){border-color:var(--selectedBorder);box-shadow:inset 0 0 0 1px var(--selectedBorder)}
+.theme-tile:has(input:focus-visible),.appearance-option:has(input:focus-visible){outline:2px solid var(--selectedBorder);outline-offset:2px}
+.theme-swatch{width:38px;aspect-ratio:1;border-radius:8px;background:#247fd0}
+.jade .theme-swatch{background:#208f78}.violet .theme-swatch{background:#7954be}
+.custom .theme-swatch{background:linear-gradient(140deg,#3a85ff,#9561da 52%,#ee8e87)}
+.appearance-option span{display:flex;justify-content:center;align-items:center;gap:5px;padding:7px 2px}
+.appearance-option .ui-icon{width:16px;height:16px}
+.appearance-option.light{background:#f8fafc;color:#25324b}
+.appearance-option.dark{background:#222c3f;color:#f8fafc}
+.appearance-option.system{background:linear-gradient(110deg,#f8fafc 49.5%,#222c3f 50.5%);color:var(--text)}
+.appearance-option.system span{background:color-mix(in srgb,var(--panel) 87%,transparent)}
+.custom-wheel{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center;padding:3px}
+#themeWheel{width:120px;max-width:100%;height:auto;touch-action:none;cursor:crosshair}
+.custom-wheel .color-choices,.wheel-controls{display:grid;gap:5px;justify-items:start}
+.wheel-controls{font-size:11px;grid-template-columns:auto minmax(0,1fr);align-items:center}
+.wheel-controls input{width:94px}
+:root[data-theme=light]{--subtle:#536985;--selectedBorder:#256bbd}
+:root[data-theme=light][data-palette]:not([data-palette=ocean]){
+  --selectedBorder:color-mix(in srgb,var(--palette-primary) 77%,#1a2335);
+  --muted:color-mix(in srgb,var(--palette-primary) 47%,#344360);
+}
+.rename-config,.ip-history-button{flex:none;display:grid;place-items:center;background:none;border:0;color:var(--muted);border-radius:5px;width:24px;height:24px}
+.rename-config{opacity:.47}
+.rename-config:hover,.rename-config:focus-visible,tr:hover .rename-config{opacity:1}
+.rename-config .ui-icon,.ip-history-button .ui-icon{width:14px;height:14px}
+.rename-input{min-width:0;max-width:100%;height:26px;background:var(--panel);color:var(--text);border:1px solid var(--selectedBorder);border-radius:4px;padding:2px 4px}
+.titlebar-tools{display:flex;align-items:center;margin-left:auto;margin-right:7px}
+#helpMenu{position:relative}
+#helpMenu summary{display:grid;place-items:center;list-style:none;width:27px;height:27px;border-radius:50%;cursor:pointer;color:var(--muted)}
+#helpMenu summary:hover{background:var(--panel2);color:var(--text)}
+#helpMenu .dialog-action{position:absolute;right:0;top:32px;z-index:30;white-space:nowrap}
+.route-form{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+.route-form input{flex:1;min-width:110px}
+.route-list{padding:0;display:grid;gap:5px}
+.route-list li{min-width:0;display:flex;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)}
+.route-list li span{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.route-list li label{font-size:12px;white-space:nowrap}
+#reportText{box-sizing:border-box;width:100%;font:12px ui-monospace,monospace;color:var(--text);background:var(--bg);padding:8px;border:1px solid var(--border);border-radius:6px}
+#ipHistoryList li{padding:5px 3px}
+#ipHistoryList time{color:var(--muted);font-size:12px;margin-left:8px}

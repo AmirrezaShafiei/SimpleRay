@@ -8,10 +8,15 @@ use std::{fs,net::TcpListener,path::PathBuf,time::{Duration,Instant}};
 use tauri::{AppHandle,Manager};
 use tempfile::TempDir;
 use tokio::{net::TcpStream,process::{Child,Command},sync::{Mutex,Semaphore},task::JoinSet,time::{sleep,timeout}};
+use crate::{diagnostics::Diagnostics, routing::{self,Mode,Routing}, tray::{self,ConnectionColor}};
 use crate::system_proxy::{self,ProxyBackup};
 use crate::switching::{self, HealthStatus, Monitor, Profile, SwitchDecision, SwitchMode, SwitchReason};
 
 const PROBE_URL:&str="https://www.gstatic.com/generate_204";
+const TRACE_URL:&str="https://www.cloudflare.com/cdn-cgi/trace";
+const RETRY_INTERVAL:Duration=Duration::from_secs(3);
+#[derive(Clone, Copy)]
+struct Probe { elapsed_ms:u64, ip:Option<std::net::IpAddr> }
 const MAX_PROFILE_BYTES:usize=32768;
 const STARTUP_TIMEOUT:Duration=Duration::from_secs(7);
 const PROBE_TIMEOUT:Duration=Duration::from_secs(9);
@@ -22,6 +27,7 @@ pub struct ConnectionStatus {
     pub state:String,
     pub server_id:Option<String>,
     pub system_proxy:bool,
+    pub connection_mode:Mode,
     pub download_bps:f64,
     pub upload_bps:f64,
     pub traffic_available:bool,
@@ -32,7 +38,7 @@ pub struct ConnectionStatus {
     pub health:HealthStatus,
 }
 impl ConnectionStatus {
-    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,download_bps:0.,upload_bps:0.,traffic_available:false,download_bytes:None,upload_bytes:None,initial_latency_ms:None,error,health:HealthStatus::default()}}
+    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,connection_mode:Mode::SystemProxy,download_bps:0.,upload_bps:0.,traffic_available:false,download_bytes:None,upload_bytes:None,initial_latency_ms:None,error,health:HealthStatus::default()}}
 }
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -47,6 +53,7 @@ struct StartedXray {
     child:Child,
     _temp_dir:TempDir,
     proxy_port:u16,
+    probe_port:u16,
     api_port:Option<u16>,
 }
 #[derive(Clone, Copy, Default)]
@@ -62,7 +69,8 @@ impl TrafficBytes {
 struct Active {
     core:StartedXray,
     server_id:String,
-    backup:ProxyBackup,
+    backup:Option<ProxyBackup>,
+    routing:Routing,
     last_poll:Instant,
     traffic_origin:TrafficBytes,
     last_traffic:TrafficBytes,
@@ -73,6 +81,9 @@ struct Active {
     system_proxy:bool,
     initial_latency_ms:u64,
 }
+impl Active {
+    fn route_available(&self)->bool { self.routing.mode==Mode::Tun || self.system_proxy }
+}
 #[derive(Default)]
 struct EngineRuntime {
     active: Option<Active>,
@@ -80,17 +91,22 @@ struct EngineRuntime {
     monitor: Monitor,
     generation: u64,
     pending: bool,
+    outage_since: Option<Instant>,
+    first_failure: Option<Instant>,
+    last_good_ping: Option<u64>,
+    recovery_serial:u64,
 }
 
 pub struct EngineManager {
     runtime: Mutex<EngineRuntime>,
     active_probe: Mutex<()>,
     candidate_probes: Semaphore,
+    network_events: Mutex<()>,
 }
 
 impl Default for EngineManager {
     fn default() -> Self {
-        Self { runtime: Mutex::default(), active_probe: Mutex::default(), candidate_probes: Semaphore::new(4) }
+        Self { runtime: Mutex::default(), active_probe: Mutex::default(), candidate_probes: Semaphore::new(4), network_events: Mutex::new(()) }
     }
 }
 
@@ -99,6 +115,7 @@ enum ConnectionChange {
     Suggested(SwitchDecision),
     Automatic(SwitchDecision),
     Undo,
+    Recover(u64),
 }
 
 struct SwitchRound {
@@ -165,15 +182,21 @@ fn user_data_dir(app:&AppHandle)->Result<PathBuf,String>{
     fs::create_dir_all(&path).map_err(|_|"Could not create local app folder")?;
     Ok(path)
 }
-async fn start_xray(app:&AppHandle,outbound:Value,stats:bool)->Result<StartedXray,String>{
+async fn start_xray(app:&AppHandle,outbound:Value,stats:bool, route:Option<&Routing>)->Result<StartedXray,String>{
     validate_outbound(&outbound)?;
     let bin=locate_xray(app)?;
     let proxy_port=pick_port()?;
     let api_port=if stats{let mut p=pick_port()?;while p==proxy_port{p=pick_port()?}Some(p)}else{None};
+    let probe_port=if route.is_some(){
+        let mut port=pick_port()?;
+        while port==proxy_port||Some(port)==api_port{port=pick_port()?}
+        port
+    }else{proxy_port};
     let dir=tempfile::Builder::new().prefix("simpleray-run-").tempdir_in(user_data_dir(app)?)
         .map_err(|_|"Could not create temporary runtime directory")?;
     let config_path=dir.path().join("config.json");
-    let config=xray_config(outbound,proxy_port,api_port);
+    let mut config=xray_config(outbound,proxy_port,api_port);
+    if let Some(settings)=route { routing::config(&mut config,settings,probe_port); }
     fs::write(&config_path,serde_json::to_vec(&config).map_err(|_|"Could not serialize runtime configuration")?)
         .map_err(|_|"Could not save Xray runtime configuration")?;
     // Core checks generated config before any process is started.
@@ -202,64 +225,106 @@ async fn start_xray(app:&AppHandle,outbound:Value,stats:bool)->Result<StartedXra
     let start=Instant::now();
     loop{
         if let Some(_status)=child.try_wait().map_err(|_|"Could not check Xray process")?{
+            if route.is_some_and(|settings|settings.mode==Mode::Tun) {
+                return Err("Xray could not start TUN. Start SimpleRay as administrator and verify the Windows network adapter.".into());
+            }
             return Err("Xray exited before its HTTP proxy became ready".into());
         }
-        if TcpStream::connect(("127.0.0.1",proxy_port)).await.is_ok(){break}
+        if TcpStream::connect(("127.0.0.1",probe_port)).await.is_ok(){
+            if route.is_some_and(|settings|settings.mode==Mode::Tun) {
+                if tun_is_ready() { break; }
+            }else{break}
+        }
         if start.elapsed()>=STARTUP_TIMEOUT{
             let _=child.start_kill();
-            return Err("Timed out waiting for the local Xray HTTP proxy".into());
+            return Err(if route.is_some_and(|settings|settings.mode==Mode::Tun) {
+                "TUN adapter did not become ready. Start SimpleRay as administrator."
+            } else { "Timed out waiting for the local Xray HTTP proxy" }.into());
         }
         sleep(Duration::from_millis(120)).await;
     }
-    Ok(StartedXray{child,_temp_dir:dir,proxy_port,api_port})
+    Ok(StartedXray{child,_temp_dir:dir,proxy_port,probe_port,api_port})
 }
-async fn probe_once(port:u16)->Result<u64,String>{
+fn tun_is_ready()->bool {
+    if_addrs::get_if_addrs().is_ok_and(|interfaces| interfaces.iter().any(|interface|
+        interface.ip().to_string()=="198.19.231.1"))
+}
+fn trace_address(text:&str)->Option<std::net::IpAddr> {
+    text.lines().find_map(|line|line.strip_prefix("ip=").and_then(|ip|ip.trim().parse().ok()))
+}
+async fn probe_round(port:u16)->Result<Probe,String>{
     let proxy=reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
         .map_err(|_|"Cannot configure local HTTP proxy probe")?;
     let client=reqwest::Client::builder().proxy(proxy).timeout(PROBE_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none()).pool_max_idle_per_host(0)
         .build().map_err(|_|"Could not create HTTP probe")?;
     let start=Instant::now();
+    let primary=async {
+        let mut response=client.get(TRACE_URL).header(reqwest::header::CONNECTION,"close").send().await.ok()?;
+        if response.status()!=reqwest::StatusCode::OK {return None}
+        let mut text=Vec::new();
+        while let Some(chunk)=response.chunk().await.ok()? {
+            if text.len()+chunk.len()>8192 {return None}
+            text.extend_from_slice(&chunk);
+        }
+        trace_address(std::str::from_utf8(&text).ok()?)
+    };
+    if let Some(ip)=timeout(Duration::from_secs(5),primary).await.ok().flatten() {
+        return Ok(Probe{elapsed_ms:start.elapsed().as_millis().max(1) as u64,ip:Some(ip)});
+    }
+    let start=Instant::now();
     let response=client.get(PROBE_URL).header(reqwest::header::CONNECTION,"close").send().await
         .map_err(|error|if error.is_timeout(){"Proxy request timed out"}else{"Proxy request failed"})?;
     if response.status()!=reqwest::StatusCode::NO_CONTENT{
-        return Err("Proxy probe did not return HTTP 204".into())
+        return Err("Proxy probe did not return HTTP 204".into());
     }
-    Ok(start.elapsed().as_millis().max(1).min(u64::MAX as u128) as u64)
+    Ok(Probe{elapsed_ms:start.elapsed().as_millis().max(1) as u64,ip:None})
+}
+async fn probe_once(port:u16)->Result<u64,String>{
+    probe_round(port).await.map(|result|result.elapsed_ms)
 }
 async fn kill(mut core:StartedXray){
     let _=core.child.kill().await;
     // TempDir drops here, removing per-session config containing credentials.
 }
 impl EngineManager {
-    pub async fn connect(&self,app:&AppHandle,server_id:String,outbound:Value)->Result<ConnectionStatus,String>{
+    pub async fn connect(&self,app:&AppHandle,server_id:String,outbound:Value,display_name:String)->Result<ConnectionStatus,String>{
         if server_id.is_empty()||server_id.len()>256{return Err("Invalid selected server ID".into())}
-        self.change_connection(app,Profile{server_id,outbound,display_name:String::new()},ConnectionChange::Manual,None).await
+        self.change_connection(app,Profile{server_id,outbound,display_name:display_name.chars().take(160).collect()},ConnectionChange::Manual,None).await
     }
 
     async fn change_connection(
         &self, app: &AppHandle, profile: Profile, change: ConnectionChange, expected: Option<(u64, u64)>
     ) -> Result<ConnectionStatus, String> {
-        let generation = {
+        let route=routing::load(app)?;
+        let (generation,replace_tun) = {
             let mut runtime = self.runtime.lock().await;
+            if matches!(change,ConnectionChange::Recover(serial) if serial!=runtime.recovery_serial){
+                return Err("Network recovery was cancelled".into());
+            }
             if expected.is_some_and(|(generation, revision)| {
                 runtime.pending || runtime.generation != generation || runtime.monitor.revision != revision
             }) { return Err("The connection or switch settings changed".into()); }
-            if runtime.active.as_ref().is_some_and(|active| active.server_id==profile.server_id) {
+            if !matches!(change,ConnectionChange::Recover(_)) && runtime.active.as_ref().is_some_and(|active| active.server_id==profile.server_id && active.routing==route) {
                 return self.snapshot_locked(&runtime);
             }
             runtime.generation = runtime.generation.wrapping_add(1);
             runtime.pending = true;
             runtime.monitor.checking = false;
             runtime.monitor.suggestion = None;
-            runtime.generation
+            let replace_tun=route.mode==Mode::Tun && runtime.active.as_ref().is_some_and(|active|active.routing.mode==Mode::Tun);
+            (runtime.generation,replace_tun)
         };
-        let prepared = Self::prepare_connection(app,profile.outbound.clone()).await;
+        let preflight=if replace_tun { Routing { mode:Mode::SystemProxy, ..route.clone() } } else { route.clone() };
+        let prepared = Self::prepare_connection(app,profile.outbound.clone(),&preflight).await;
         let mut runtime = self.runtime.lock().await;
         if runtime.generation != generation { return Err("The connection request was superseded".into()); }
         runtime.pending = false;
+        if matches!(change,ConnectionChange::Recover(serial) if serial!=runtime.recovery_serial){
+            return Err("Network recovery was cancelled".into());
+        }
         let result = async {
-            let (new_core, initial_latency_ms) = prepared?;
+            let (mut new_core, mut probe) = prepared?;
             if expected.is_some_and(|(_, revision)| runtime.monitor.revision != revision) {
                 return Err("The switch settings changed".into());
             }
@@ -267,31 +332,64 @@ impl EngineManager {
                 let valid = match decision.reason {
                     SwitchReason::Recovery => runtime.monitor.failures >= 2 || runtime.active.is_none(),
                     SwitchReason::LowerLatency => runtime.monitor.failures < 2
-                        && switching::qualifies(runtime.monitor.live.estimate(), Some(initial_latency_ms)),
+                        && switching::qualifies(runtime.monitor.live.estimate(), Some(probe.elapsed_ms)),
                 };
                 if !valid { return Err("The latest test no longer qualifies for switching".into()); }
             }
+            if replace_tun {
+                kill(new_core).await;
+                let old = runtime.active.take().ok_or("The active TUN session changed")?;
+                let old_route=old.routing.clone();
+                let old_profile=runtime.monitor.wanted.clone();
+                kill(old.core).await;
+                match Self::prepare_connection(app,profile.outbound.clone(),&route).await {
+                    Ok((core,result))=>{new_core=core;probe=result;}
+                    Err(error)=>{
+                        if let Some(old_profile)=old_profile {
+                            if let Ok((core,previous_probe))=Self::prepare_connection(app,old_profile.outbound.clone(),&old_route).await {
+                                let now=Instant::now();
+                                runtime.active=Some(Active{core,server_id:old_profile.server_id.clone(),backup:None,
+                                    routing:old_route,last_poll:now,traffic_origin:TrafficBytes::default(),
+                                    last_traffic:TrafficBytes::default(),last_traffic_at:now,download_bps:0.,upload_bps:0.,
+                                    traffic_available:false,system_proxy:false,initial_latency_ms:previous_probe.elapsed_ms});
+                                runtime.monitor.reset_session(Some(old_profile),Some(previous_probe.elapsed_ms),now);
+                            }
+                        }
+                        return Err(error);
+                    }
+                }
+            }
             // Read a starting point before enabling System Proxy for the new core.
             let traffic_origin=match new_core.api_port {
-                Some(port)=>query_traffic(app,port).await.unwrap_or_default(),
+                Some(port)=>query_traffic(app,port,route.mode).await.unwrap_or_default(),
                 None=>TrafficBytes::default(),
             };
-            let backup=if let Some(active)=runtime.active.as_ref() {
-                let mut snapshot=active.backup.clone();
-                system_proxy::switch(app,&mut snapshot,active.core.proxy_port,new_core.proxy_port)?;
-                snapshot
-            } else {
-                system_proxy::enable(app,new_core.proxy_port)?
+            let previous_proxy=runtime.active.as_ref().and_then(|active|active.backup.as_ref().map(|backup|(backup,active.core.proxy_port)));
+            let backup=match (route.mode,previous_proxy) {
+                (Mode::SystemProxy,Some((backup,port)))=>{
+                    let mut snapshot=(*backup).clone();
+                    system_proxy::switch(app,&mut snapshot,port,new_core.proxy_port)?;
+                    Some(snapshot)
+                }
+                (Mode::SystemProxy,None)=>Some(system_proxy::enable(app,new_core.proxy_port)?),
+                (Mode::Tun,Some((backup,port)))=>{system_proxy::restore(app,backup,port)?;None}
+                (Mode::Tun,None)=>None,
             };
             if let Some(old)=runtime.active.take(){kill(old.core).await;}
             let previous = runtime.monitor.wanted.clone();
             let now=Instant::now();
+            let initial_latency_ms=probe.elapsed_ms;
+            let system_proxy=backup.is_some();
             runtime.active=Some(Active{
-                core:new_core,server_id:profile.server_id.clone(),backup,last_poll:now,
+                core:new_core,server_id:profile.server_id.clone(),backup,routing:route,last_poll:now,
                 traffic_origin,last_traffic:traffic_origin,last_traffic_at:now,
-                download_bps:0.,upload_bps:0.,traffic_available:false,system_proxy:true,initial_latency_ms,
+                download_bps:0.,upload_bps:0.,traffic_available:false,system_proxy,initial_latency_ms,
             });
             runtime.last_error=None;
+            runtime.outage_since=None;
+            runtime.first_failure=None;
+            runtime.last_good_ping=Some(initial_latency_ms);
+            if let Some(ip)=probe.ip { app.state::<Diagnostics>().observation(app,&profile.server_id,ip); }
             runtime.monitor.reset_session(Some(profile),Some(initial_latency_ms),now);
             if !matches!(change, ConnectionChange::Manual) {
                 runtime.monitor.cooldown=Some(now+switching::SWITCH_COOLDOWN);
@@ -305,13 +403,15 @@ impl EngineManager {
         if result.is_err() && expected.is_some_and(|(_, revision)| runtime.monitor.revision == revision) {
             runtime.monitor.retry_later(Instant::now());
         }
+        if result.is_err() { app.state::<Diagnostics>().record("Connection start or switch failed."); }
+        Self::sync_tray(app,&runtime);
         result
     }
 
-    async fn prepare_connection(app:&AppHandle,outbound:Value)->Result<(StartedXray,u64),String>{
-        let new_core=start_xray(app,outbound,true).await?;
-        match probe_once(new_core.proxy_port).await {
-            Ok(ms)=>Ok((new_core,ms)),
+    async fn prepare_connection(app:&AppHandle,outbound:Value,route:&Routing)->Result<(StartedXray,Probe),String>{
+        let new_core=start_xray(app,outbound,true,Some(route)).await?;
+        match probe_round(new_core.probe_port).await {
+            Ok(probe)=>Ok((new_core,probe)),
             Err(error)=>{
                 kill(new_core).await;
                 Err(format!("Connection verification failed: {error}"))
@@ -382,55 +482,129 @@ impl EngineManager {
         runtime.generation=runtime.generation.wrapping_add(1);
         runtime.pending=false;
         runtime.monitor.checking=false;
-        if let Some(active)=runtime.active.as_ref(){
+        if let Some((active,backup))=runtime.active.as_ref().and_then(|active|active.backup.as_ref().map(|backup|(active,backup))){
             // Do not kill a working proxy if Windows refuses to restore settings:
             // otherwise clients would be redirected to a dead local port.
-            system_proxy::restore(app,&active.backup,active.core.proxy_port)?;
+            system_proxy::restore(app,backup,active.core.proxy_port)?;
         }
         if let Some(old)=runtime.active.take(){kill(old.core).await;}
         runtime.last_error=None;
         runtime.monitor.reset_session(None,None,Instant::now());
+        runtime.outage_since=None;
+        runtime.first_failure=None;
+        runtime.last_good_ping=None;
+        Self::sync_tray(app,&runtime);
         Ok(ConnectionStatus::off(None))
     }
     pub async fn repair_system_proxy(&self, app: &AppHandle) -> Result<ConnectionStatus, String> {
         let mut runtime=self.runtime.lock().await;
         Self::reap_core(app,&mut runtime).await;
         let active=runtime.active.as_mut().ok_or("Connect a configuration first")?;
+        if active.routing.mode==Mode::Tun { return Err("TUN does not use Windows System Proxy".into()); }
         let port=active.core.proxy_port;
         if !system_proxy::is_active(port)? {
-            active.backup=system_proxy::enable(app,port)?;
+            active.backup=Some(system_proxy::enable(app,port)?);
         }
         active.system_proxy=true;
         self.snapshot_locked(&runtime)
     }
-    pub async fn ping_active(&self, server_id: &str, scheduled: bool) -> Result<u64, String> {
+    pub async fn ping_active(&self, app:&AppHandle, server_id: &str, scheduled: bool) -> Result<u64, String> {
         let _probe=match self.active_probe.try_lock() {
             Ok(guard)=>guard,
             Err(_)=>return Err("Live latency test already running".into()),
         };
-        let (port,generation)={
+        let (port,generation,mode)={
             let mut runtime=self.runtime.lock().await;
             let active=runtime.active.as_ref().filter(|active| active.server_id==server_id)
                 .ok_or("This configuration is no longer active")?;
-            let port=active.core.proxy_port;
+            let port=active.core.probe_port;
+            let mode=active.routing.mode;
             if scheduled {
                 if runtime.pending { return Err("Connection is changing".into()); }
                 runtime.monitor.next_live=Some(Instant::now()+switching::LIVE_INTERVAL);
             }
-            (port,runtime.generation)
+            (port,runtime.generation,mode)
         };
-        let result=probe_once(port).await;
+        let mut result=probe_round(port).await;
+        if mode==Mode::Tun&&!tun_is_ready(){result=Err("The TUN adapter is unavailable".into());}
         let mut runtime=self.runtime.lock().await;
-        if runtime.generation!=generation || !runtime.active.as_ref().is_some_and(|active| active.core.proxy_port==port
+        if runtime.generation!=generation || !runtime.active.as_ref().is_some_and(|active| active.core.probe_port==port
             && active.server_id==server_id) {
             return Err("The active connection changed during the probe".into());
         }
+        let milliseconds=result.as_ref().ok().map(|probe|probe.elapsed_ms);
+        let now=Instant::now();
         if scheduled {
-            runtime.monitor.record_scheduled(result.as_ref().ok().copied(),Instant::now());
+            runtime.monitor.record_scheduled(milliseconds,now);
+            if runtime.monitor.failures==1 {runtime.monitor.next_live=Some(now+RETRY_INTERVAL);}
+        } else if milliseconds.is_some() {
+            runtime.monitor.record_scheduled(milliseconds,now);
         } else {
-            runtime.monitor.record_live(result.as_ref().ok().copied());
+            runtime.monitor.record_live(None);
         }
-        result
+        if let Some(ms)=milliseconds{
+            runtime.outage_since=None;
+            runtime.first_failure=None;
+            runtime.last_good_ping=Some(ms);
+        }else if scheduled{
+            let began=*runtime.first_failure.get_or_insert(now);
+            if runtime.monitor.failures>=2 && runtime.outage_since.is_none(){
+                runtime.outage_since=Some(began);
+                app.state::<Diagnostics>().record("Two health rounds failed for the active connection.");
+            }
+        }
+        if let Ok(Probe{ip:Some(ip),..})=&result {
+            app.state::<Diagnostics>().observation(app,server_id,*ip);
+        }
+        Self::sync_tray(app,&runtime);
+        result.map(|probe|probe.elapsed_ms)
+    }
+
+    fn sync_tray(app:&AppHandle,runtime:&EngineRuntime){
+        let color=if runtime.monitor.wanted.is_none(){ConnectionColor::Blue}
+            else if runtime.outage_since.is_some(){ConnectionColor::Red}
+            else if runtime.active.is_some(){ConnectionColor::Green}
+            else{ConnectionColor::Blue};
+        let profile=runtime.monitor.wanted.as_ref();
+        let name=profile.map(|profile|profile.display_name.as_str()).filter(|name|!name.is_empty());
+        let outage=runtime.outage_since.map(|since|since.elapsed().as_secs());
+        tray::connection_icon(app,color,name,runtime.last_good_ping,outage);
+    }
+    pub async fn rename_active(&self,app:&AppHandle,id:&str,name:String){
+        let mut runtime=self.runtime.lock().await;
+        if let Some(profile)=runtime.monitor.wanted.as_mut().filter(|profile|profile.server_id==id){
+            profile.display_name=name.chars().take(160).collect();
+            Self::sync_tray(app,&runtime);
+        }
+    }
+    pub async fn cancel_recovery(&self){
+        let mut runtime=self.runtime.lock().await;
+        runtime.recovery_serial=runtime.recovery_serial.wrapping_add(1);
+    }
+    pub async fn recover_network(&self,app:&AppHandle){
+        let Ok(_event)=self.network_events.try_lock() else{return};
+        let (profile,generation,serial)={
+            let runtime=self.runtime.lock().await;
+            if runtime.pending || runtime.active.is_none(){return}
+            let Some(profile)=runtime.monitor.wanted.clone() else{return};
+            (profile,runtime.generation,runtime.recovery_serial)
+        };
+        sleep(Duration::from_secs(2)).await;
+        let unchanged=|runtime:&EngineRuntime| runtime.generation==generation && runtime.recovery_serial==serial && !runtime.pending;
+        if !unchanged(&*self.runtime.lock().await){return}
+        match self.ping_active(app,&profile.server_id,true).await {
+            Ok(_)=>return,
+            Err(error) if error=="Live latency test already running"=>return,
+            _=>{}
+        }
+        let version={
+            let runtime=self.runtime.lock().await;
+            if !unchanged(&runtime){return}
+            (runtime.generation,runtime.monitor.revision)
+        };
+        if self.change_connection(app,profile,ConnectionChange::Recover(serial),Some(version)).await.is_err() {
+            app.state::<Diagnostics>().record("Recovery after a Windows network change failed.");
+        }
     }
 
     fn snapshot_locked(&self,session:&EngineRuntime)->Result<ConnectionStatus,String>{
@@ -441,11 +615,11 @@ impl EngineManager {
         if let Some(active)=&session.active{
             let transferred=active.core.api_port.map(|_|active.last_traffic.since(active.traffic_origin));
             Ok(ConnectionStatus{state:"connected".into(),server_id:Some(active.server_id.clone()),
-                system_proxy:active.system_proxy,download_bps:active.download_bps,upload_bps:active.upload_bps,
+                system_proxy:active.system_proxy,connection_mode:active.routing.mode,download_bps:active.download_bps,upload_bps:active.upload_bps,
                 traffic_available:active.traffic_available,
                 download_bytes:transferred.map(|bytes|bytes.down),upload_bytes:transferred.map(|bytes|bytes.up),
                 initial_latency_ms:Some(active.initial_latency_ms),health,
-                error:(!active.system_proxy).then(||"Windows System Proxy is off. Restore it to route Windows traffic.".into())})
+                error:(!active.route_available()).then(||"Windows System Proxy is off. Restore it to route Windows traffic.".into())})
         }else{
             let mut status=ConnectionStatus::off(session.last_error.clone());
             status.health=health;
@@ -459,9 +633,9 @@ impl EngineManager {
         if let Some(active)=runtime.active.as_mut(){
             if active.last_poll.elapsed()>=Duration::from_millis(900){
                 active.last_poll=Instant::now();
-                active.system_proxy=matches!(system_proxy::is_active(active.core.proxy_port),Ok(true));
+                active.system_proxy=active.backup.is_some()&&matches!(system_proxy::is_active(active.core.proxy_port),Ok(true));
                 if let Some(api_port)=active.core.api_port{
-                    match query_traffic(app,api_port).await{
+                    match query_traffic(app,api_port,active.routing.mode).await{
                         Ok(totals)=>{
                             let elapsed=active.last_traffic_at.elapsed().as_secs_f64().max(0.001);
                             let delta=totals.since(active.last_traffic);
@@ -486,23 +660,27 @@ impl EngineManager {
         runtime.monitor.failures=2;
         runtime.monitor.last_ms=None;
         runtime.monitor.next_round=Some(Instant::now());
-        let restored=system_proxy::restore(app,&old.backup,old.core.proxy_port).is_ok();
+        let restored=old.backup.as_ref().is_none_or(|backup|system_proxy::restore(app,backup,old.core.proxy_port).is_ok());
+        runtime.outage_since=Some(Instant::now());
+        app.state::<Diagnostics>().record("Xray-core exited unexpectedly.");
         kill(old.core).await;
         runtime.last_error=Some(if restored {
-            "Xray-core exited unexpectedly. Windows System Proxy was released."
+            "Xray-core exited unexpectedly. The connection was released."
         } else {
             "Xray-core exited and Windows System Proxy could not be restored. Restart SimpleRay to retry."
         }.into());
+        Self::sync_tray(app,runtime);
     }
     pub async fn monitor_core(&self,app:&AppHandle) {
         loop {
             sleep(Duration::from_secs(1)).await;
             let mut runtime=self.runtime.lock().await;
             Self::reap_core(app,&mut runtime).await;
+            if runtime.outage_since.is_some(){Self::sync_tray(app,&runtime);}
         }
     }
 
-    pub async fn monitor_latency(&self) {
+    pub async fn monitor_latency(&self,app:&AppHandle) {
         loop {
             sleep(Duration::from_millis(250)).await;
             let id={
@@ -512,7 +690,7 @@ impl EngineManager {
                 }
                 runtime.active.as_ref().map(|active|active.server_id.clone())
             };
-            if let Some(id)=id {let _=self.ping_active(&id,true).await;}
+            if let Some(id)=id {let _=self.ping_active(app,&id,true).await;}
         }
     }
 
@@ -529,7 +707,7 @@ impl EngineManager {
         let mut runtime=self.runtime.lock().await;
         let now=Instant::now();
         let generation=runtime.generation;
-        if runtime.pending || runtime.active.as_ref().is_some_and(|active| !active.system_proxy) {return None;}
+        if runtime.pending || runtime.active.as_ref().is_some_and(|active| !active.route_available()) {return None;}
         let monitor=&mut runtime.monitor;
         if monitor.mode==SwitchMode::Off || monitor.next_round.is_none_or(|deadline|now<deadline) {return None;}
         let active_id=&monitor.wanted.as_ref()?.server_id;
@@ -560,7 +738,7 @@ impl EngineManager {
             let now=Instant::now();
             let mut runtime=self.runtime.lock().await;
             if runtime.generation!=round.generation || runtime.monitor.revision!=round.revision {return;}
-            let proxy_disabled=runtime.active.as_ref().is_some_and(|active|!active.system_proxy);
+            let proxy_disabled=runtime.active.as_ref().is_some_and(|active|!active.route_available());
             let monitor=&mut runtime.monitor;
             monitor.checking=false;
             if proxy_disabled {monitor.suggestion=None;return;}
@@ -605,14 +783,18 @@ impl EngineManager {
 
     pub async fn shutdown(&self,app:&AppHandle){let _=self.disconnect(app).await;}
 }
-async fn query_traffic(app:&AppHandle,port:u16)->Result<TrafficBytes,String>{
+async fn query_traffic(app:&AppHandle,port:u16,mode:Mode)->Result<TrafficBytes,String>{
     let xray=locate_xray(app)?;
     let mut command=Command::new(xray);
     #[cfg(target_os="windows")]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let inbound=if mode==Mode::Tun{"tun-in"}else{"proxy-in"};
+    let prefix=format!("inbound>>>{inbound}>>>traffic");
+    let up=format!("{prefix}>>>uplink");
+    let down=format!("{prefix}>>>downlink");
     command.arg("api").arg("statsquery")
         .arg(format!("--server=127.0.0.1:{port}"))
-        .arg("--pattern=inbound>>>proxy-in>>>traffic")
+        .arg(format!("--pattern={prefix}"))
         .arg("--reset=false")
         .kill_on_drop(true).stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -625,8 +807,8 @@ async fn query_traffic(app:&AppHandle,port:u16)->Result<TrafficBytes,String>{
     for stat in parsed.get("stat").and_then(Value::as_array).ok_or("Missing statistics")? {
         let name=stat.get("name").and_then(Value::as_str).unwrap_or("");
         let count=stat.get("value").and_then(|v|v.as_str().and_then(|s|s.parse::<u64>().ok()).or_else(||v.as_u64())).unwrap_or(0);
-        if name=="inbound>>>proxy-in>>>traffic>>>uplink"{traffic.up=traffic.up.saturating_add(count)}
-        if name=="inbound>>>proxy-in>>>traffic>>>downlink"{traffic.down=traffic.down.saturating_add(count)}
+        if name==up{traffic.up=traffic.up.saturating_add(count)}
+        if name==down{traffic.down=traffic.down.saturating_add(count)}
     }
     Ok(traffic)
 }
@@ -647,7 +829,7 @@ async fn ping_server(
     app:&AppHandle,outbound:Value,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,
 )->Result<LatencyResult,String>{
     if !(1..=3).contains(&samples){return Err("Ping measurements must be 1, 2 or 3".into())}
-    let core=start_xray(app,outbound,false).await?;
+    let core=start_xray(app,outbound,false,None).await?;
     let mut values=Vec::with_capacity(samples.into());
     let mut reason=None;
     for attempt in 1..=samples{

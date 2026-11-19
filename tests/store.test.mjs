@@ -91,3 +91,18 @@ test('phone import reuses a renamed or reordered subscription configuration and 
  assert.throws(()=>a.receiveFromPhone('https://example.com/sub'));
  assert.equal(a.rows().length,2);
 });
+
+test('inline rename is a local override retained by subscription refresh',()=>{
+  const storage={getItem:()=>null,setItem:()=>{}};
+  const repo=createRepository(storage);
+  const sub=repo.addSubscription('Test source','https://example.org/sub');
+  const uri='vless://11111111-2222-4333-8444-555555555555@server.test:443?security=tls';
+  repo.refreshSubscription(sub.id,uri+'#Provider');
+  const entry=repo.rows()[0];
+  repo.renameServer(entry.id,'My alias');
+  repo.refreshSubscription(sub.id,uri+'#Changed');
+  const renamed=repo.rows()[0];
+  assert.equal(renamed.id,entry.id);
+  assert.equal(renamed.name,'My alias');
+  assert.equal(renamed.uri,uri+'#Changed');
+});

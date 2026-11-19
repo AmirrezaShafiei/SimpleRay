@@ -42,7 +42,7 @@
         <span class="brand-name" data-tauri-drag-region>SimpleRay</span>
         <span id="appVersion" class="version" data-tauri-drag-region hidden></span>
       </div>
-      <div class="window-actions" hidden>
+      <div class="titlebar-tools"><details id="helpMenu"><summary aria-label="Help" title="Help">?</summary><button id="openReport" type="button" class="dialog-action">Error report</button></details></div><div class="window-actions" hidden>
         <button type="button" id="windowMinimize" title="Minimize" aria-label="Minimize"><svg class="ui-icon" aria-hidden="true"><use href="#icon-minimize"/></svg></button>
         <button type="button" id="windowMaximize" title="Maximize" aria-label="Maximize"><svg class="ui-icon" aria-hidden="true"><use href="#icon-maximize"/></svg></button>
         <button type="button" id="windowClose" title="Close" aria-label="Close"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
@@ -52,7 +52,7 @@
       <div class="preview-disclaimer" role="note"><span class="preview-dot"></span><strong id="phaseStatus">Xray-core</strong><span id="runtimeNotice"></span></div>
       <section class="connection-panel" aria-label="Connection status">
         <button id="connectionSwitch" type="button" class="toggle" role="switch" aria-checked="false" aria-label="Connect or disconnect"><span class="toggle-thumb"></span></button>
-        <div class="connection-label"><span class="connection-state"><span class="state-led" id="stateLed"></span><strong id="connectionState">Disconnected</strong></span><button id="selectedServer" class="selected-server" title="Find configuration in list" type="button"><span id="selectedFlag" class="flag"><svg class="ui-icon" aria-hidden="true"><use href="#icon-globe"/></svg></span><span id="selectedText">No server selected</span><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron"/></svg></button></div>
+        <div class="connection-label"><span class="connection-state"><span class="state-led" id="stateLed"></span><strong id="connectionState">Disconnected</strong><button type="button" id="ipHistoryButton" class="icon-only ip-history-button" title="Exit IP history" aria-label="Exit IP history" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-globe"/></svg></button></span><button id="selectedServer" class="selected-server" title="Find configuration in list" type="button"><span id="selectedFlag" class="flag"><svg class="ui-icon" aria-hidden="true"><use href="#icon-globe"/></svg></span><span id="selectedText">No server selected</span><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron"/></svg></button></div>
         <div class="traffic" id="traffic" aria-label="Measured traffic rate" hidden><span class="rate"><svg class="ui-icon down" aria-hidden="true"><use href="#icon-down"/></svg><span class="rate-values"><span id="downRate">0 KB/s</span><small id="downTotal" title="Downloaded in this session">0 B total</small></span></span><span class="rate"><svg class="ui-icon up" aria-hidden="true"><use href="#icon-up"/></svg><span class="rate-values"><span id="upRate">0 KB/s</span><small id="upTotal" title="Uploaded in this session">0 B total</small></span></span></div>
         <div class="latency-current">
           <div><small id="latencyLabel">Latency</small><strong id="selectedLatency">—</strong><small id="connectionStability" hidden></small></div>
@@ -77,21 +77,73 @@
         <div class="table-scroll"><table id="serversTable"><thead><tr><th><button class="sort-head favorite-head" data-sort="favorite" aria-label="Sort by favorites"><svg class="ui-icon" aria-hidden="true"><use href="#icon-star"/></svg><span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="name">Name <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="type">Type <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="latency">Latency (ms) <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="source">Source <span class="sort-indicator"></span></button></th></tr></thead><tbody id="serverRows"></tbody></table></div>
         <p class="empty-message" id="emptyMessage" hidden>No configurations found. Use Paste or its menu to add servers.</p>
       </section>
-      <footer class="app-footer"><div class="footer-left"><span class="footer-note" id="footerConnection"><span class="status-mini"></span> Disconnected</span></div><div class="footer-right"><span>System Proxy <strong id="systemProxyStatus">Auto with connection</strong></span><button id="repairProxyButton" type="button" class="proxy-repair" hidden>Restore proxy</button><span class="divider-vertical"></span><span>Start at Startup <strong id="startupStatus">Off</strong></span></div></footer>
+      <footer class="app-footer"><div class="footer-left"><span class="footer-note" id="footerConnection"><span class="status-mini"></span> Disconnected</span></div><div class="footer-right"><span>Connection mode <strong id="systemProxyStatus">Auto with connection</strong></span><button id="repairProxyButton" type="button" class="proxy-repair" hidden>Restore proxy</button><span class="divider-vertical"></span><span>Start at Startup <strong id="startupStatus">Off</strong></span></div></footer>
     </main>
   </div>
   <div id="contextMenu" class="context-menu" role="menu" hidden></div>
-  <dialog id="settingsDialog" class="settings-dialog" aria-label="Settings"><div class="dialog-heading"><div><small>PREFERENCES</small><h2>Settings</h2></div><button type="button" id="settingsClose" class="dialog-close" aria-label="Close Settings"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><div class="setting-line"><label for="themeSelect"><strong>Theme</strong></label><select id="themeSelect"><option value="ocean">Ocean</option><option value="jade">Jade</option><option value="violet">Violet</option><option value="custom">Custom</option></select></div>
-  <div class="setting-line"><label for="appearanceSelect"><strong>Appearance</strong></label><select id="appearanceSelect"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
-  <div class="setting-line theme-colors" id="themeColors" hidden>
-    <span>Custom colors</span><div class="color-choices">
-      <label>Primary <input type="color" id="primaryColor" value="#245995" /></label>
-      <label>Accent <input type="color" id="accentColor" value="#3eadef" /></label>
+  <dialog id="settingsDialog" class="settings-dialog" aria-label="Settings"><div class="dialog-heading"><div><small>PREFERENCES</small><h2>Settings</h2></div><button type="button" id="settingsClose" class="dialog-close" aria-label="Close Settings"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><section class="appearance-settings" aria-label="Appearance">
+    <fieldset class="theme-choices"><legend>Theme</legend>
+      <label class="theme-tile ocean"><input type="radio" name="palette" value="ocean"><span class="theme-swatch"></span><span>Ocean</span></label>
+      <label class="theme-tile jade"><input type="radio" name="palette" value="jade"><span class="theme-swatch"></span><span>Jade</span></label>
+      <label class="theme-tile violet"><input type="radio" name="palette" value="violet"><span class="theme-swatch"></span><span>Violet</span></label>
+      <label class="theme-tile custom"><input type="radio" name="palette" value="custom"><span class="theme-swatch"></span><span>Custom</span></label>
+    </fieldset>
+    <fieldset class="appearance-choices"><legend>Appearance</legend>
+      <label class="appearance-option light"><input type="radio" name="appearance" value="light"><span><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19m0-14-1.5 1.5m-11 11L5 19"/></svg> Light</span></label>
+      <label class="appearance-option dark"><input type="radio" name="appearance" value="dark"><span><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a8 8 0 0 1-11-11 9 9 0 1 0 11 11Z"/></svg> Dark</span></label>
+      <label class="appearance-option system"><input type="radio" name="appearance" value="system"><span><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="#f8fafc"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="#222c3f"/></svg> System</span></label>
+    </fieldset>
+    <div class="custom-wheel" id="themeColors" hidden>
+      <canvas id="themeWheel" width="196" height="196" aria-hidden="true"></canvas>
+      <div class="color-choices">
+        <label>Primary <input type="color" id="primaryColor" value="#245995" /></label>
+        <label>Accent <input type="color" id="accentColor" value="#3eadef" /></label>
+        <div class="wheel-controls">
+          <label for="wheelTarget">Wheel edits</label>
+          <select id="wheelTarget"><option value="themePrimary">Primary</option><option value="themeAccent">Accent</option></select>
+          <label for="wheelLightness">Lightness</label>
+          <input id="wheelLightness" type="range" min="5" max="95" value="50">
+        </div>
+      </div>
     </div>
-  </div>
+  </section>
   <div class="setting-line"><div><strong>Ping All samples</strong><p>Average of two real-delay probes by default</p></div><select id="pingSamples" aria-label="Ping All samples"><option value="1">1 — Single</option><option value="2">2 — Balanced</option><option value="3">3 — Average</option></select></div><div class="setting-line"><div><strong>Server switching</strong><p>Live latency stays on in all modes</p></div><select id="switchMode" aria-label="Server switching"><option value="off">Off</option><option value="suggest">Suggest</option><option value="automatic">Automatic</option></select></div>
   <div class="setting-line" id="switchSourceRow" hidden><div><strong>Candidate servers</strong><p>Up to 4 candidates, in saved order</p></div><select id="switchSource" aria-label="Candidate servers"><option value="favorites">Favorites</option></select></div>
-  <div class="setting-line"><div><strong>Start with Windows</strong><p>Launch minimized after Windows sign-in</p></div><input type="checkbox" id="startupToggle" aria-label="Start with Windows" /></div><div class="setting-line"><div><strong>Minimize to tray</strong><p>Closing the main window keeps SimpleRay running</p></div><input type="checkbox" id="trayToggle" aria-label="Minimize to tray" checked /></div><div class="setting-line"><div><strong>Auto-connect on app start</strong><p>Connect last selected server, if available</p></div><input type="checkbox" id="autoConnectToggle" aria-label="Auto-connect on app start" /></div><div class="setting-line"><div><strong>Subscriptions</strong><p>Add, rename, refresh, or delete subscriptions</p></div><button type="button" class="dialog-action" id="settingsSubscriptions">Manage</button></div><p class="settings-footnote">Changes are saved automatically. Connection credentials are still stored in local WebView storage without encryption; use on a trusted Windows profile only. The bundled Xray-core is an independent MPL-2.0 component.</p></dialog>
+  <div class="setting-line"><div><strong>Start with Windows</strong><p>Launch minimized after Windows sign-in</p></div><input type="checkbox" id="startupToggle" aria-label="Start with Windows" /></div><div class="setting-line"><div><strong>Minimize to tray</strong><p>Closing the main window keeps SimpleRay running</p></div><input type="checkbox" id="trayToggle" aria-label="Minimize to tray" checked /></div><div class="setting-line"><div><strong>Auto-connect on app start</strong><p>Connect last selected server, if available</p></div><input type="checkbox" id="autoConnectToggle" aria-label="Auto-connect on app start" /></div><div class="setting-line"><div><strong>Subscriptions</strong><p>Add, rename, refresh, or delete subscriptions</p></div><button type="button" class="dialog-action" id="settingsSubscriptions">Manage</button></div><div class="setting-line"><strong>Routing</strong><button id="settingsRouting" class="dialog-action" type="button">Manage rules</button></div><p class="settings-footnote">Changes are saved automatically. Connection credentials are still stored in local WebView storage without encryption; use on a trusted Windows profile only. The bundled Xray-core is an independent MPL-2.0 component.</p></dialog>
+  <dialog id="routingDialog" class="settings-dialog" aria-labelledby="routingTitle">
+    <div class="dialog-heading"><h2 id="routingTitle">Routing</h2><button type="button" class="dialog-close" data-close="routingDialog" aria-label="Close routing">×</button></div>
+    <div class="setting-line"><label for="routeMode"><strong>Connection mode</strong></label><select id="routeMode"><option value="systemProxy">System Proxy</option><option value="tun">TUN (Route by app)</option></select></div>
+    <h3>Route by app</h3>
+    <p class="field-hint" id="routeModeHelp">TUN applies app rules at the Windows network level. Start SimpleRay as administrator to use TUN.</p>
+    <form id="appRouteForm" class="route-form">
+      <label for="appRoutePath">Executable</label>
+      <input id="appRoutePath" maxlength="1024" required placeholder="C:\Apps\Telegram.exe">
+      <button type="button" id="browseRouteApp" class="dialog-action">Browse</button>
+      <button type="submit" class="dialog-action">Add app</button>
+    </form>
+    <ul id="appRouteList" class="route-list"></ul>
+    <h3>Route by website</h3>
+    <form id="siteRouteForm" class="route-form">
+      <label for="siteRouteDomain">Domain</label>
+      <input id="siteRouteDomain" required maxlength="253" placeholder="example.com">
+      <select id="siteRouteChoice" aria-label="Website route"><option value="direct">Direct</option><option value="proxy">Through tunnel</option></select>
+      <button type="submit" class="dialog-action">Add site</button>
+    </form>
+    <ul id="siteRouteList" class="route-list"></ul>
+    <p id="routingError" class="form-error" role="alert"></p>
+    <p class="field-hint">App rules take priority over website rules. Website rules cover the domain and its subdomains.</p>
+    <div class="form-actions"><button id="saveRouting" type="button" class="dialog-action primary">Save routing</button></div>
+  </dialog>
+  <dialog id="ipHistoryDialog" class="settings-dialog" aria-labelledby="ipHistoryTitle">
+    <div class="dialog-heading"><h2 id="ipHistoryTitle">Exit IP history</h2><button class="dialog-close" type="button" data-close="ipHistoryDialog" aria-label="Close IP history">×</button></div>
+    <p id="ipHistoryServer" class="field-hint"></p><ol id="ipHistoryList"></ol>
+  </dialog>
+  <dialog id="reportDialog" class="settings-dialog" aria-labelledby="reportTitle">
+    <div class="dialog-heading"><h2 id="reportTitle">Error report</h2><button class="dialog-close" type="button" data-close="reportDialog" aria-label="Close error report">×</button></div>
+    <label for="reportText" class="field-hint">Review the report before copying it.</label>
+    <textarea id="reportText" rows="10" readonly></textarea>
+    <div class="form-actions"><button id="copyReport" type="button" class="dialog-action primary">Copy report</button></div>
+  </dialog>
   <dialog id="phoneTransferDialog" class="settings-dialog action-dialog phone-dialog" aria-labelledby="phoneTransferTitle">
     <div class="dialog-heading"><h2 id="phoneTransferTitle">Receive from phone</h2><button class="dialog-close" type="button" data-close="phoneTransferDialog" aria-label="Close"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
     <p class="field-hint">Connect both devices to the same trusted Wi-Fi, or connect your computer to your phone’s hotspot. If Windows asks for firewall access, allow it on private networks.</p>

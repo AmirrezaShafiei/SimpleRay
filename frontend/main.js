@@ -5,6 +5,8 @@ import {outboundFromShareLink} from './xray-config.js';
 import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,normalizedLatencyResult,pingPool} from './runtime.js';
 import {displayServerName,renderFlag} from './flags.js';
 import {phoneTransferControls} from './phone-transfer.js';
+import {attachColorWheel} from './color-wheel.js';
+import {createRoutingEditor, renderIpHistory} from './routing.js';
 import {APPEARANCE_KEY,THEME_COLORS,paintAppearance,restoreAppearance,savedPreferences,themeColor} from './theme.js';
 const $=id=>document.getElementById(id);
 const pref=savedPreferences(localStorage);
@@ -23,6 +25,9 @@ let toastTimeout;
 let connectionPoll;
 let connectionRevision=0;
 let activePing;
+let editNameId;
+let colorWheel;
+let routingEditor;
 const firstPingResults=new Map();
 
 
@@ -102,11 +107,13 @@ function errorMessage(e){return e instanceof Error?e.message:String(e||'Operatio
 function safeAction(fn){try{return fn()}catch(e){toast(errorMessage(e));return null}}
 function applyTheme(){
   paintAppearance(document.documentElement,state,window.matchMedia?.('(prefers-color-scheme: light)')?.matches);
-  $('themeSelect').value=state.palette;
-  $('appearanceSelect').value=state.appearance;
+  for(const input of document.querySelectorAll('input[name="palette"], input[name="appearance"]')){
+    input.checked=input.value===state[input.name];
+  }
   $('themeColors').hidden=state.palette!=='custom';
   $('primaryColor').value=state.themePrimary;
   $('accentColor').value=state.themeAccent;
+  if(state.palette==='custom')colorWheel?.refresh();
 }
 function sync(){
   const db=repo.snapshot();
@@ -157,6 +164,7 @@ function setSelected(id){
   previous?.classList.remove('selected');
   previous?.setAttribute('aria-selected','false');
   state.selected=id;
+  if(nativeHost())void nativeInvoke("cancel_network_recovery").catch(()=>{});
   const selected=serverRow(id);
   selected?.classList.add('selected');
   selected?.setAttribute('aria-selected','true');
@@ -171,6 +179,8 @@ function renderConnection(){
   const active=session?state.servers.find(s=>s.id===c.serverId)||null:null;
   const server=session?active:getSelected();
   const disabled=!nativeHost()||state.connectionBusy||(!session&&!server);
+  const usingTun=c.connectionMode==='tun';
+  const routeActive=usingTun||c.systemProxy;
   $('connectionSwitch').disabled=Boolean(disabled);
   $('connectionSwitch').setAttribute('aria-checked',String(Boolean(session)));
   $('connectionSwitch').setAttribute('aria-label',session?'Disconnect':'Connect');
@@ -178,7 +188,7 @@ function renderConnection(){
   const status=state.connectionBusy||(unhealthy&&session?'Server not responding':connected?'Connected':'Disconnected');
   $('connectionState').textContent=status;
   $('stateLed').title=state.connectionBusy||status;
-  $('stateLed').classList.toggle('proxy-off',connected&&(!c.systemProxy||unhealthy));
+  $('stateLed').classList.toggle('proxy-off',connected&&(!routeActive||unhealthy));
   renderFlag($('selectedFlag'),server,icon('globe'));
   $('selectedText').textContent=server?`${displayServerName(server)} · ${server.type}`:session?'Current connection':'No server selected';
   const ms=session?(health?.attempts?health.latencyMs:c.initialLatencyMs):latencyView(server)?.latency;
@@ -205,12 +215,13 @@ function renderConnection(){
     $(element).textContent=Number.isFinite(total)?`${formatBytes(total)} total`:'—';
   }
   $('connectionSwitch').closest('.connection-panel').classList.toggle('no-servers',!server);
-  $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected&&!unhealthy&&c.systemProxy);
+  $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected&&!unhealthy&&routeActive);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('connecting',Boolean(state.connectionBusy));
   $('footerConnection').lastChild.textContent=` ${status}`;
-  $('systemProxyStatus').textContent=session?(c.systemProxy?'Active':'Off'):'Auto with connection';
-  $('systemProxyStatus').dataset.state=session?(c.systemProxy?'active':'off'):'automatic';
-  $('repairProxyButton').hidden=!connected||c.systemProxy;
+  $('systemProxyStatus').textContent=session?(usingTun?'TUN':c.systemProxy?'System Proxy':'Off'):'Auto with connection';
+  $('systemProxyStatus').dataset.state=session?(routeActive?'active':'off'):'automatic';
+  $('repairProxyButton').hidden=!connected||routeActive;
+  $('ipHistoryButton').hidden=!nativeHost()||!server;
   $('repairProxyButton').disabled=Boolean(state.connectionBusy);
   renderSwitchNotice(session?health:null);
 }
@@ -270,8 +281,8 @@ async function connectSelected(id=state.selected){
   state.connectionBusy=state.connection.state==='connected'?'Switching…':'Connecting…';renderConnection();
   try{
     const outbound=outboundFromShareLink(server.uri);
-    state.connection=await nativeInvoke('connect_server',{serverId:id,outbound});
-    toast('Connected · Windows System Proxy is active');
+    state.connection=await nativeInvoke('connect_server',{serverId:id,outbound,displayName:displayServerName(server)});
+    toast(state.connection.connectionMode==='tun'?'Connected · TUN is active':'Connected · Windows System Proxy is active');
   }catch(err){toast(errorMessage(err))}
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
@@ -380,7 +391,7 @@ async function pingServers(servers,samples){
 
 function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').innerHTML=icon(active?(state.sortDirection==='asc'?'up':'down'):'sort');btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
 function orderedRows(){const rows=filterServers(state.servers,state.query);return sortServers(rows.map(latencyView),state.sortKey,state.sortDirection)}
-function renderTable(){const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
+function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
     const starCell=tr.insertCell();
     const actions=document.createElement('div');actions.className='row-actions';
     const star=document.createElement('button');star.type='button';star.className='star'+(s.favorite?' is-favorite':'');star.innerHTML=icon('star');star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);
@@ -389,7 +400,16 @@ function renderTable(){const rows=orderedRows(),body=$('serverRows');const focus
     pin.addEventListener('click',e=>{e.stopPropagation();togglePin(s.id)});
     actions.addEventListener('dblclick',e=>e.stopPropagation());
     actions.append(star,pin);starCell.append(actions);
-    const nameCell=tr.insertCell();const wrap=document.createElement('div');wrap.className='name-cell';const flag=document.createElement('span');flag.className='flag';renderFlag(flag,s,icon('globe'));const name=document.createElement('span');name.className='server-name';name.textContent=displayServerName(s);wrap.append(flag,name);nameCell.append(wrap);
+    const nameCell=tr.insertCell();
+    const wrap=document.createElement('div');wrap.className='name-cell';
+    const flag=document.createElement('span');flag.className='flag';renderFlag(flag,s,icon('globe'));
+    const name=document.createElement('span');name.className='server-name';name.textContent=displayServerName(s);
+    const rename=document.createElement('button');
+    rename.type='button';rename.className='rename-config';rename.title='Rename configuration';
+    rename.setAttribute('aria-label','Rename '+displayServerName(s));rename.innerHTML=icon('edit');
+    rename.addEventListener('click',e=>{e.stopPropagation();startInlineRename(s,wrap,name,rename)});
+    wrap.addEventListener('dblclick',e=>{if(e.target.closest('button,input'))e.stopPropagation()});
+    wrap.append(flag,name,rename);nameCell.append(wrap);
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
     const latencyCell=tr.insertCell();const latency=document.createElement('span');latency.className='latency-text '+latencyClass(s.latency);latency.textContent=typeof s.latency==='number'?`${s.latency}`:s.latencyStatus==='timeout'?'Timeout':s.latencyStatus==='error'?'Failed':'—';latency.dataset.provisional=String(Boolean(s.provisional));latency.title=s.provisional?'First probe · waiting for the average':s.latencyAttempted?`${s.latencySuccess||0}/${s.latencyAttempted} successful real-delay probes`: 'Not measured';latencyCell.append(latency);
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
@@ -398,6 +418,37 @@ function renderTable(){const rows=orderedRows(),body=$('serverRows');const focus
     tr.addEventListener('keydown',e=>{if(e.target!==tr)return;if(e.key==='Enter'){e.preventDefault();setSelected(s.id);void connectSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();setSelected(s.id);const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
   if(focusedId){const row=serverRow(focusedId);const control=focused.matches('.star')?row?.querySelector('.star'):focused.matches('.pin-button')?row?.querySelector('.pin-button'):row;control?.focus({preventScroll:true})}
   $('emptyMessage').hidden=rows.length!==0;renderSort();renderConnection()}
+function startInlineRename(server, wrap, name, button){
+  if(editNameId)return;
+  editNameId=server.id;
+  const input=document.createElement('input');
+  input.className='rename-input';input.type='text';input.maxLength=160;
+  input.value=server.name;input.setAttribute('aria-label','Configuration name');
+  let closed=false;
+  const finish=(save,restoreFocus=false)=>{
+    if(closed)return;
+    if(save&&input.value.trim()&&!safeAction(()=>repo.renameServer(server.id,input.value)))return;
+    closed=true;
+    editNameId=null;
+    sync();
+    if(save&&nativeHost()){
+      const renamed=state.servers.find(item=>item.id===server.id);
+      if(renamed)void nativeInvoke('rename_active_server',{serverId:server.id,displayName:displayServerName(renamed)}).catch(()=>{});
+    }
+    if(restoreFocus)serverRow(server.id)?.querySelector('.rename-config')?.focus({preventScroll:true});
+  };
+  input.addEventListener('click',event=>event.stopPropagation());
+  input.addEventListener('keydown',event=>{
+    if(event.key==='Enter'||event.key==='Escape'){
+      event.preventDefault();event.stopPropagation();
+      finish(event.key==='Enter',true);
+    }
+  });
+  input.addEventListener('blur',()=>finish(input.value!==server.name));
+  wrap.replaceChild(input,name);
+  button.hidden=true;
+  input.focus();input.select();
+}
 function render(){renderTable()}
 function toggleFavorite(id){if(safeAction(()=>repo.toggleFavorite(id)))sync()}
 function togglePin(id){if(safeAction(()=>repo.togglePin(id)))sync()}
@@ -499,6 +550,31 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
     if(state.pingBusy){state.pingAbort=true;toast('Cancelling queued tests; active probes will finish')}
     else void pingServers(state.servers,state.pingSamples);
   });
+  routingEditor=createRoutingEditor({invoke:nativeInvoke,showDialog,nativeHost,onSaved:async changed=>{
+    if(changed&&state.connection.state==='connected'){
+      const id=state.connection.serverId;
+      await disconnectConnection();
+      if(state.connection.state!=='connected')await connectSelected(id);
+    }
+  }});
+  $('settingsRouting').addEventListener('click',()=>void routingEditor.open());
+  $('ipHistoryButton').addEventListener('click',async()=>{
+    const server=state.servers.find(row=>row.id===(state.connection.serverId??state.selected));
+    if(!server)return;
+    $('ipHistoryServer').textContent=displayServerName(server);
+    try{renderIpHistory($('ipHistoryList'),await nativeInvoke('exit_ip_history',{serverId:server.id}));showDialog('ipHistoryDialog')}
+    catch(error){toast(errorMessage(error))}
+  });
+  $('openReport').disabled=!nativeHost();
+  $('openReport').addEventListener('click',async()=>{
+    $('helpMenu').open=false;
+    try{$('reportText').value=await nativeInvoke('error_report');showDialog('reportDialog')}
+    catch(error){toast(errorMessage(error))}
+  });
+  $('copyReport').addEventListener('click',async()=>{
+    try{await nativeInvoke('copy_error_report',{text:$('reportText').value});toast('Report copied')}
+    catch(error){toast(errorMessage(error))}
+  });
   $('settingsButton').addEventListener('click',()=>showDialog('settingsDialog'));
   $('startupToggle').addEventListener('change',e=>void changeDesktopSetting('startup',e.target.checked));
   $('trayToggle').addEventListener('change',e=>void changeDesktopSetting('minimizeToTray',e.target.checked));
@@ -512,13 +588,17 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   window.addEventListener('simpleray:exit-blocked',()=>toast('Cannot exit safely: System Proxy restoration failed. Restore Windows proxy settings before forcing exit.'));
   $('settingsClose').addEventListener('click',()=>$('settingsDialog').close());
   for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close());
-  for(const [id,field] of [['themeSelect','palette'],['appearanceSelect','appearance']]){
-    $(id).addEventListener('change',event=>{
-      state[field]=event.target.value;
+  for(const input of document.querySelectorAll('input[name="palette"], input[name="appearance"]')){
+    input.addEventListener('change',()=>{
+      state[input.name]=input.value;
       applyTheme();
       persist();
     });
   }
+  colorWheel=attachColorWheel({
+    canvas:$('themeWheel'),target:$('wheelTarget'),lightness:$('wheelLightness'),
+    read:field=>state[field],write:(field,value)=>{state[field]=value;applyTheme()},commit:persist
+  });
   for(const [id,field,fallback] of [
     ['primaryColor','themePrimary',THEME_COLORS.primary],
     ['accentColor','themeAccent',THEME_COLORS.accent]

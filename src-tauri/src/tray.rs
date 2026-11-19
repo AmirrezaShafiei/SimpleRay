@@ -160,3 +160,48 @@ pub async fn accept_suggestion(
     }
     Ok(())
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionColor { Blue, Green, Red }
+
+#[derive(Default)]
+pub struct ConnectionTray(std::sync::Mutex<Option<(ConnectionColor,String)>>);
+
+pub fn connection_icon(app:&AppHandle,color:ConnectionColor,name:Option<&str>,latency:Option<u64>,outage:Option<u64>) {
+    let name=name.map(|name|name.chars().filter(|ch|!ch.is_control()).take(38).collect::<String>());
+    let mut tooltip="SimpleRay".to_string();
+    if let Some(name)=name.filter(|name|!name.is_empty()){tooltip.push_str(" · ");tooltip.push_str(&name);}
+    if let Some(ms)=latency{tooltip.push_str(&format!(" · {ms} ms"));}
+    if let Some(seconds)=outage{
+        let elapsed=if seconds<60 {format!("{seconds}s")} else if seconds<3600 {format!("{}m {}s",seconds/60,seconds%60)} else {format!("{}h {}m",seconds/3600,seconds/60%60)};
+        tooltip.push_str(&format!(" · Down {elapsed}"));
+    }
+    let Some(tray)=app.tray_by_id("simpleray-tray") else{return};
+    let state=app.state::<ConnectionTray>();
+    let Ok(mut previous)=state.0.lock() else{return};
+    if previous.as_ref().is_none_or(|(_,text)|*text!=tooltip) {
+        let _=tray.set_tooltip(Some(&tooltip));
+    }
+    if previous.as_ref().is_none_or(|(old,_)|*old!=color){
+        if let Some(original)=app.default_window_icon(){
+            let icon=match color{
+                ConnectionColor::Blue=>original.clone(),
+                _=>{
+                    let palette=if color==ConnectionColor::Green{[35u8,217,135]}else{[250u8,75,101]};
+                    let mut pixels=original.rgba().to_vec();
+                    for pixel in pixels.chunks_exact_mut(4) {
+                        if pixel[3]==0 || pixel[2].saturating_sub(pixel[0])<28 {continue;}
+                        let scale=f32::from(pixel[2])/255.0;
+                        for (channel,level) in pixel.iter_mut().zip(palette){
+                            *channel=(f32::from(level)*scale).round() as u8;
+                        }
+                    }
+                    tauri::image::Image::new_owned(pixels,original.width(),original.height())
+                }
+            };
+            let _=tray.set_icon(Some(icon.clone()));
+            if let Some(window)=app.get_webview_window("main"){let _=window.set_icon(icon);}
+        }
+    }
+    *previous=Some((color,tooltip));
+}

@@ -7,3 +7,6 @@ src-tauri/binaries/*.dat
 .DS_Store
 *.log
 *.bak
+
+src-tauri/binaries/wintun.dll
+src-tauri/licenses/WINTUN-LICENSE.txt

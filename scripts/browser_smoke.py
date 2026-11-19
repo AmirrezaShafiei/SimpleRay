@@ -30,16 +30,26 @@ with sync_playwright() as p:
     assert page.locator('[data-sort="source"]').get_attribute('data-active')=='true'
     page.locator('#serverRows tr').first.locator('.star').click()
     page.locator('#settingsButton').click()
-    page.locator('#themeSelect').select_option('light')
+    page.locator('.appearance-option.light').click()
     assert page.locator('html').get_attribute('data-theme')=='light'
+    page.locator('.theme-tile.custom').click()
+    page.locator('#themeWheel').click(position={'x': 105, 'y': 60})
+    assert page.locator('html').get_attribute('data-palette')=='custom'
     page.locator('#settingsClose').click()
+    row=page.locator('#serverRows tr',has_text='France 01')
+    row.locator('.rename-config').click()
+    row.locator('.rename-input').fill('Renamed France')
+    row.locator('.rename-input').press('Enter')
+    assert page.locator('#serverRows tr',has_text='Renamed France').count()==1
+    page.locator('#updateButton').click()
+    page.wait_for_function("document.querySelector('#toast').textContent.includes('1/1')")
+    assert page.locator('#serverRows tr',has_text='Renamed France').count()==1
     page.reload(wait_until='networkidle')
     assert page.locator('#serverRows tr').count()==2
     assert page.locator('html').get_attribute('data-theme')=='light'
     page.locator('#settingsButton').click()
-    page.locator('#themeSelect').select_option('dark')
+    page.locator('.appearance-option.dark').click()
     page.locator('#settingsClose').click()
-    page.screenshot(path='/mnt/data/SimpleRay-Phase2-preview.png',full_page=True)
     assert not errors, f'Browser errors: {errors}'
     print('Browser UI smoke passed: manual add, mocked subscription fetch, source, sorting, favorites, theme, reload persistence')
     browser.close()

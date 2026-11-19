@@ -56,6 +56,15 @@ export function createRepository(storage,{idFactory=id}={}){
     get loadError(){return loadError},
     snapshot,rows,
     setSelected(serverId){return transact(next=>{if(!next.servers.some(s=>s.id===serverId))throw new Error('Server not found');next.selectedId=serverId})},
+    renameServer(serverId, name){
+      const displayName = sanitizedName(name, '');
+      return transact(next=>{
+        const server = next.servers.find(row=>row.id===serverId);
+        if(!server)throw new Error('Server not found');
+        server.name = displayName;
+        if(server.subscriptionId)server.localName = displayName;
+      });
+    },
     toggleFavorite(serverId){return transact(next=>{const s=next.servers.find(x=>x.id===serverId);if(!s)throw new Error('Server not found');s.favorite=!s.favorite})},
     togglePin(serverId){
       return transact(next=>{
@@ -124,6 +133,7 @@ export function createRepository(storage,{idFactory=id}={}){
       return transact(next=>{
         const source=next.servers.find(s=>s.id===serverId);if(!source)throw new Error('Server not found');
         const duplicate={...clone(source),id:idFactory(),name:sanitizedName(source.name)+' (copy)',favorite:false,pinned:false,subscriptionId:null,latency:null,latencyStatus:'unknown',latencySuccess:0,latencyAttempted:0};
+        delete duplicate.localName;
         next.servers.push(duplicate);next.selectedId=duplicate.id;
       });
     },
@@ -167,6 +177,10 @@ export function createRepository(storage,{idFactory=id}={}){
           if(subscription.hiddenSignatures.includes(data.signature)||imported.has(data.signature))continue;
           const old=existing.get(data.signature);
           const server={...data,id:old?.id||idFactory(),subscriptionId,favorite:old?.favorite||false,pinned:old?.pinned||false,latency:old?.latency??null,latencyStatus:old?.latencyStatus||'unknown',latencySuccess:old?.latencySuccess||0,latencyAttempted:old?.latencyAttempted||0};
+          if(old?.localName){
+            server.localName=old.localName;
+            server.name=old.localName;
+          }
           imported.set(data.signature,server);
           if(old)retained++;else added++;
         }

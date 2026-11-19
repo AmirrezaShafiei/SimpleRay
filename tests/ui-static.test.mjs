@@ -40,7 +40,7 @@ test('the connection panel separates live latency and actual System Proxy status
   const engine=readFileSync('src-tauri/src/engine.rs','utf8');
   assert.match(html,/id="activePingButton"[^>]*hidden/);
   assert.match(js,/nativeInvoke\('ping_active_connection',\{serverId:request.serverId\}\)/);
-  assert.match(engine,/fn ping_active[\s\S]*?let result=probe_once\(port\).await/);
+  assert.match(engine,/fn ping_active[\s\S]*?let mut result=probe_round\(port\).await/);
   assert.match(html,/id="systemProxyStatus">Auto with connection/);
   assert.match(js,/nativeInvoke\('restore_system_proxy'\)/);
 });

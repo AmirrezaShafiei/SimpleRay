@@ -2,6 +2,12 @@ use std::time::Duration;
 use tauri::{AppHandle,Manager,State};
 use serde_json::Value;
 mod system_proxy;
+mod routing;
+mod diagnostics;
+mod network_events;
+
+#[derive(Default)]
+struct RoutingGuard(tokio::sync::Mutex<()>);
 mod preferences;
 mod tray;
 mod engine;
@@ -61,8 +67,8 @@ async fn fetch_subscription_text(url:String)->Result<String,String>{
     String::from_utf8(bytes).map_err(|_|"Subscription is not valid UTF-8".into())
 }
 #[tauri::command]
-async fn connect_server(app:AppHandle,manager:State<'_,EngineManager>,server_id:String,outbound:Value)->Result<ConnectionStatus,String>{
-    manager.connect(&app,server_id,outbound).await
+async fn connect_server(app:AppHandle,manager:State<'_,EngineManager>,server_id:String,outbound:Value,display_name:Option<String>)->Result<ConnectionStatus,String>{
+    manager.connect(&app,server_id,outbound,display_name.unwrap_or_default()).await
 }
 #[tauri::command]
 async fn disconnect_server(app:AppHandle,manager:State<'_,EngineManager>)->Result<ConnectionStatus,String>{
@@ -77,8 +83,8 @@ async fn restore_system_proxy(app:AppHandle,manager:State<'_,EngineManager>)->Re
     manager.repair_system_proxy(&app).await
 }
 #[tauri::command]
-async fn ping_active_connection(manager:State<'_,EngineManager>,server_id:String)->Result<u64,String>{
-    manager.ping_active(&server_id,false).await
+async fn ping_active_connection(app:AppHandle,manager:State<'_,EngineManager>,server_id:String)->Result<u64,String>{
+    manager.ping_active(&app,&server_id,false).await
 }
 #[tauri::command]
 async fn measure_server_latency(
@@ -125,6 +131,41 @@ fn show_main_window(app:AppHandle)->Result<(),String>{
     let window=app.get_webview_window("main").ok_or("Main window unavailable")?;
     window.show().map_err(|_|"Cannot show SimpleRay".to_string())
 }
+#[tauri::command]
+fn get_routing_settings(app:AppHandle)->Result<routing::Routing,String>{routing::load(&app)}
+#[tauri::command]
+async fn set_routing_settings(app:AppHandle,guard:State<'_,RoutingGuard>,settings:routing::Routing)->Result<bool,String>{
+    let _operation=guard.0.lock().await;
+    let result=routing::save(&app,settings).await;
+    if result.is_err(){app.state::<diagnostics::Diagnostics>().record("Routing settings could not be applied.");}
+    result
+}
+#[tauri::command]
+async fn choose_routing_app()->Result<Option<String>,String>{routing::choose_executable().await}
+#[tauri::command]
+fn exit_ip_history(state:State<'_,diagnostics::Diagnostics>,server_id:String)->Vec<diagnostics::ExitEntry>{state.history(&server_id)}
+#[tauri::command]
+fn error_report(app:AppHandle,state:State<'_,diagnostics::Diagnostics>)->String{
+    let mode=match routing::load(&app).map(|settings|settings.mode){
+        Ok(routing::Mode::SystemProxy)=>"System Proxy",
+        Ok(routing::Mode::Tun)=>"TUN",
+        Err(_)=>"Unavailable",
+    };
+    state.report(mode)
+}
+#[tauri::command]
+fn copy_error_report(text:String)->Result<(),String>{
+    if text.len()>16_384 {return Err("Report is too large".into());}
+    arboard::Clipboard::new().and_then(|mut clipboard|clipboard.set_text(text))
+        .map_err(|_|"Unable to copy report to the clipboard".into())
+}
+#[tauri::command]
+async fn rename_active_server(app:AppHandle,manager:State<'_,EngineManager>,server_id:String,display_name:String){
+    manager.rename_active(&app,&server_id,display_name).await
+}
+#[tauri::command]
+async fn cancel_network_recovery(manager:State<'_,EngineManager>){manager.cancel_recovery().await}
+
 #[cfg_attr(mobile,tauri::mobile_entry_point)]
 pub fn run(){
     let builder = tauri::Builder::default();
@@ -139,6 +180,8 @@ pub fn run(){
         .manage(EngineManager::default())
         .manage(ExitGuard::default())
         .manage(PhoneTransfer::default())
+        .manage(RoutingGuard::default())
+        .manage(tray::ConnectionTray::default())
         .setup(|app|{
             // If a previous session crashed while System Proxy was enabled, restore its prior settings.
             // An unrecoverable record blocks proxy takeover instead of overwriting unknown user settings.
@@ -146,14 +189,16 @@ pub fn run(){
                 eprintln!("SimpleRay proxy recovery unavailable: {e}");
             }
             app.manage(DesktopSettings::new(app.handle()));
+            app.manage(diagnostics::Diagnostics::new(app.handle()));
             tray::setup(app)?;
+            network_events::start(app.handle());
             let handle=app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 handle.state::<EngineManager>().monitor_core(&handle).await;
             });
             let handle=app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                handle.state::<EngineManager>().monitor_latency().await;
+                handle.state::<EngineManager>().monitor_latency(&handle).await;
             });
             let handle=app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -175,7 +220,8 @@ pub fn run(){
             ping_active_connection,measure_server_latency,
             configure_server_switching,accept_server_suggestion,undo_server_switch,
             dismiss_tray_suggestion,accept_tray_suggestion,
-            get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window
+            get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window,
+            get_routing_settings,set_routing_settings,choose_routing_app,exit_ip_history,error_report,copy_error_report,rename_active_server,cancel_network_recovery
         ])
         .on_window_event(tray::handle_window_event)
         .build(tauri::generate_context!())
