@@ -3,6 +3,13 @@ import {outboundFromShareLink} from './xray-config.js';
 
 export const STORAGE_KEY='simpleray.configurations.v2';
 const VERSION=2;
+const REFRESH_HOURS = [0, 6, 24];
+const HOUR_MS = 3_600_000;
+
+function validateRefreshHours(hours) {
+  if (!REFRESH_HOURS.includes(hours)) throw new Error('Invalid subscription refresh interval');
+  return hours;
+}
 export const MAX_PINNED_SERVERS=3;
 const clone=value=>JSON.parse(JSON.stringify(value));
 const fresh=()=>({version:VERSION,servers:[],subscriptions:[],selectedId:null});
@@ -148,22 +155,53 @@ export function createRepository(storage,{idFactory=id}={}){
         if(next.selectedId===serverId)next.selectedId=next.servers[0]?.id??null;
       });
     },
-    addSubscription(name,url){
+    addSubscription(name,url,autoRefreshHours=0){
       const cleanedName=sanitizedName(name,'');const cleanedUrl=validateSubscriptionUrl(url);
+      validateRefreshHours(autoRefreshHours);
       let created;
       transact(next=>{
         if(next.subscriptions.some(s=>s.url===cleanedUrl))throw new Error('This subscription URL is already saved');
-        created={id:idFactory(),name:cleanedName,url:cleanedUrl,updatedAt:null,lastError:null,hiddenSignatures:[]};
+        created={id:idFactory(),name:cleanedName,url:cleanedUrl,autoRefreshHours,updatedAt:null,lastAttemptAt:null,lastError:null,hiddenSignatures:[]};
         next.subscriptions.push(created);
       });
       return clone(created);
+    },
+    editSubscription(subscriptionId, {name, url, autoRefreshHours=0}) {
+      const cleanedName = sanitizedName(name, '');
+      const cleanedUrl = validateSubscriptionUrl(url);
+      validateRefreshHours(autoRefreshHours);
+      let result;
+      transact(next => {
+        const subscription = next.subscriptions.find(item => item.id === subscriptionId);
+        if (!subscription) throw new Error('Subscription not found');
+        if (next.subscriptions.some(item => item.id !== subscriptionId && item.url === cleanedUrl)) {
+          throw new Error('This subscription URL is already saved');
+        }
+        const urlChanged = subscription.url !== cleanedUrl;
+        Object.assign(subscription, {name:cleanedName, url:cleanedUrl, autoRefreshHours});
+        result = {subscription:clone(subscription), urlChanged};
+      });
+      return result;
+    },
+    dueSubscriptions(now=Date.now()) {
+      return database.subscriptions.filter(subscription => {
+        const hours = subscription.autoRefreshHours;
+        if (!hours || !REFRESH_HOURS.includes(hours)) return false;
+        const lastAttempt = Date.parse(subscription.lastAttemptAt ?? subscription.updatedAt ?? '');
+        return !Number.isFinite(lastAttempt) || now - lastAttempt >= hours * HOUR_MS;
+      }).map(clone);
     },
     renameSubscription(subscriptionId,name){
       const cleanedName=sanitizedName(name,'');
       return transact(next=>{const s=next.subscriptions.find(s=>s.id===subscriptionId);if(!s)throw new Error('Subscription not found');s.name=cleanedName});
     },
-    setSubscriptionError(subscriptionId,message){
-      return transact(next=>{const s=next.subscriptions.find(s=>s.id===subscriptionId);if(!s)throw new Error('Subscription not found');s.lastError=String(message).slice(0,180)});
+    setSubscriptionError(subscriptionId,message,attemptedAt=new Date().toISOString()){
+      return transact(next=>{
+        const subscription=next.subscriptions.find(s=>s.id===subscriptionId);
+        if(!subscription)throw new Error('Subscription not found');
+        subscription.lastError=String(message).slice(0,180);
+        subscription.lastAttemptAt=attemptedAt;
+      });
     },
     refreshSubscription(subscriptionId,payload,updatedAt=new Date().toISOString()){
       const parsed=parseSubscriptionPayload(payload);let added=0,removed=0,retained=0;
@@ -186,7 +224,7 @@ export function createRepository(storage,{idFactory=id}={}){
         }
         removed=previous.filter(s=>!imported.has(s.signature)).length;
         next.servers=next.servers.filter(s=>s.subscriptionId!==subscriptionId).concat([...imported.values()]);
-        subscription.updatedAt=updatedAt;subscription.lastError=null;
+        subscription.updatedAt=updatedAt;subscription.lastAttemptAt=updatedAt;subscription.lastError=null;
         if(!next.servers.some(s=>s.id===next.selectedId))next.selectedId=next.servers[0]?.id??null;
       });
       return {added,removed,retained,invalid:parsed.errors.length};

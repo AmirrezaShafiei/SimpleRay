@@ -65,7 +65,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .paste-menu[hidden]{display:none}.paste-menu button{width:100%;display:block;background:none;border:0;color:var(--text);padding:11px 13px;border-radius:7px;text-align:left;font-size:13px}
 .paste-menu button:hover{background:var(--selected)}
 .action-dialog{width:min(95vw,540px)}.wider-dialog{width:min(95vw,630px)}
-.action-dialog input:not([type=checkbox]),.action-dialog textarea{width:100%;display:block;border:1px solid var(--border);background:var(--bg);border-radius:7px;padding:10px 12px;color:var(--text);font-size:13px;resize:vertical}
+.action-dialog input:not([type=checkbox]),.action-dialog textarea,.action-dialog #subscriptionRefreshHours{width:100%;display:block;border:1px solid var(--border);background:var(--bg);border-radius:7px;padding:10px 12px;color:var(--text);font-size:13px;resize:vertical}
 .action-dialog textarea{min-height:94px}.field-label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:15px 0 7px}.field-hint,.confirm-description{color:var(--muted);font-size:12px;line-height:1.6}
 .dialog-buttons{display:flex;justify-content:flex-end;gap:10px;margin-top:23px;flex-wrap:wrap}
 .dialog-action{color:var(--text);background:var(--button);border:1px solid var(--border);border-radius:7px;font-size:12px;padding:7px 11px;white-space:nowrap}
@@ -73,7 +73,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .dialog-action:disabled{opacity:.5;cursor:not-allowed}
 .subscription-list{display:flex;flex-direction:column;gap:9px;max-height:44vh;overflow:auto}
 .subscription-card{padding:13px;border:1px solid var(--border);border-radius:12px;background:var(--bg);display:flex;align-items:center;gap:11px;flex-wrap:wrap}
-.subscription-meta{flex:1;min-width:150px;overflow:hidden}.subscription-meta strong{font-size:13px}.subscription-meta p{font-size:11px;color:var(--muted);margin:4px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.subscription-meta .sub-error{color:var(--red)}
+.subscription-meta{flex:1;min-width:150px;overflow:hidden}.subscription-meta p.subscription-title-row{margin:0}
+.subscription-title{display:inline;max-width:100%;padding:0;border:0;background:none;color:var(--text);font:inherit;font-size:13px;font-weight:700;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subscription-title:hover,.subscription-title:focus-visible{color:var(--blue);text-decoration:underline}
+.subscription-filter{align-self:flex-start;max-width:calc(100% - 16px);min-height:28px;margin:8px 8px 0;gap:6px}
+.subscription-filter span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.subscription-meta p{font-size:11px;color:var(--muted);margin:4px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.subscription-meta .sub-error{color:var(--red)}
 .subscription-actions{display:flex;gap:6px;flex-wrap:wrap}.subscription-actions button{border:1px solid var(--border);background:var(--button);color:var(--text);padding:7px 9px;border-radius:7px;font-size:11px}
 .subscription-actions button:hover{border-color:var(--selectedBorder)}.subscription-actions .delete-sub{color:var(--red)}
 .manager-empty{font-size:13px;color:var(--muted);padding:20px 8px}

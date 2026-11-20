@@ -74,3 +74,13 @@ test('Phase 6: source layout remains minimalist and has no fake live data when d
   assert.match(frontend,/\$\('traffic'\)\.hidden=!connected/);
   assert.ok(existsSync('design/reference.jpg'));
 });
+
+test('server switching compares six alternatives even when the active server is in the source',()=>{
+  const switching=read('src-tauri/src/switching.rs');
+  assert.match(switching,/pub const MAX_CANDIDATES: usize = 6;/);
+  assert.match(engine,/candidates\.len\(\)>switching::MAX_CANDIDATES\+1/);
+  assert.match(engine,/filter\(\|candidate\| &candidate\.server_id!=active_id\)\s*\.take\(switching::MAX_CANDIDATES\)/);
+  assert.match(frontend,/const MAX_SWITCH_CANDIDATES = 6;/);
+  assert.match(frontend,/candidates\.length===MAX_SWITCH_CANDIDATES\+1/);
+  assert.match(html,/Up to 6 candidates, in saved order/);
+});

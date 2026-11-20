@@ -214,7 +214,7 @@ async fn handle(
     }
 
     let Ok(body) = Limited::new(request.into_body(), MAX_LINK_BYTES * 3 + 64).collect().await else {
-        return Ok(message(StatusCode::PAYLOAD_TOO_LARGE, "Configuration is too long", "Send one share link or one WireGuard profile."));
+        return Ok(message(StatusCode::PAYLOAD_TOO_LARGE, "Configuration is too long", "Send one subscription URL, share link, or WireGuard profile."));
     };
     let bytes = body.to_bytes();
     let Ok(form) = std::str::from_utf8(&bytes) else { return Ok(invalid_link()) };
@@ -239,7 +239,7 @@ async fn handle(
         return Ok(used());
     }
     *inbox = Mailbox::Received(link.to_owned());
-    Ok(message(StatusCode::OK, "Sent to SimpleRay", "Check your computer for the import and connection test."))
+    Ok(message(StatusCode::OK, "Sent to SimpleRay", "Check SimpleRay on your computer to finish importing."))
 }
 
 fn rejected_form() -> Reply {
@@ -247,11 +247,11 @@ fn rejected_form() -> Reply {
 }
 
 fn invalid_link() -> Reply {
-    message(StatusCode::BAD_REQUEST, "No configuration received", "Go back and paste one share link or WireGuard profile.")
+    message(StatusCode::BAD_REQUEST, "No configuration received", "Go back and paste one subscription URL, share link, or WireGuard profile.")
 }
 
 fn used() -> Reply {
-    message(StatusCode::GONE, "This transfer code has been used", "Create a new code in SimpleRay to send another server.")
+    message(StatusCode::GONE, "This transfer code has been used", "Create a new code in SimpleRay to send another link or configuration.")
 }
 
 fn message(status: StatusCode, title: &str, detail: &str) -> Reply {

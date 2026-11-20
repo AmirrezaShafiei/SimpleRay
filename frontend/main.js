@@ -11,13 +11,15 @@ import {APPEARANCE_KEY,THEME_COLORS,paintAppearance,restoreAppearance,savedPrefe
 const $=id=>document.getElementById(id);
 const pref=savedPreferences(localStorage);
 const repo=createRepository(localStorage);
+const MAX_SWITCH_CANDIDATES = 6;
 const switching={
   mode:['off','suggest','automatic'].includes(pref.switchMode)?pref.switchMode:'off',
   source:typeof pref.switchSource==='string'?pref.switchSource:'favorites'
 };
 let lastSwitchConfig;
 let configUpdate=Promise.resolve();
-const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+const SUBSCRIPTION_CHECK_INTERVAL = 60_000;
+const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,editingSubscriptionId:null,subscriptionFilterId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -121,8 +123,9 @@ function sync(){
   const db=repo.snapshot();
   state.servers=repo.rows();
   state.selected=db.selectedId;
+  renderSubscriptionFilter(db.subscriptions);
   render();
-  renderSubscriptionList();
+  renderSubscriptionList(db.subscriptions);
   renderSwitchSettings(db.subscriptions);
   void updateSwitchConfig().catch(error=>toast(errorMessage(error)));
 }
@@ -145,7 +148,8 @@ function updateSwitchConfig(){
     for(const server of state.servers){
       if(switching.source==='favorites'?!server.favorite:switching.source!==`subscription:${server.subscriptionId}`)continue;
       try{candidates.push({serverId:server.id,displayName:displayServerName(server),outbound:outboundFromShareLink(server.uri)})}catch{continue}
-      if(candidates.length===5)break;
+      // Include one extra profile in case the active server is among the candidates.
+      if(candidates.length===MAX_SWITCH_CANDIDATES+1)break;
     }
   }
   const config={mode:switching.mode,candidates};
@@ -467,7 +471,12 @@ async function pingServers(servers,samples){
 }
 
 function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').innerHTML=icon(active?(state.sortDirection==='asc'?'up':'down'):'sort');btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
-function orderedRows(){const rows=filterServers(state.servers,state.query);return sortServers(rows.map(latencyView),state.sortKey,state.sortDirection)}
+function orderedRows(){
+  const servers = state.subscriptionFilterId
+    ? state.servers.filter(server => server.subscriptionId === state.subscriptionFilterId)
+    : state.servers;
+  return sortServers(filterServers(servers, state.query).map(latencyView), state.sortKey, state.sortDirection);
+}
 function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
     const starCell=tr.insertCell();
     const actions=document.createElement('div');actions.className='row-actions';
@@ -494,7 +503,14 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
     tr.addEventListener('contextmenu',e=>{e.preventDefault();setSelected(s.id);showContextMenu(s.id,e.clientX,e.clientY)});
     tr.addEventListener('keydown',e=>{if(e.target!==tr)return;if(e.key==='Enter'){e.preventDefault();setSelected(s.id);void connectSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();setSelected(s.id);const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
   if(focusedId){const row=serverRow(focusedId);const control=focused.matches('.star')?row?.querySelector('.star'):focused.matches('.pin-button')?row?.querySelector('.pin-button'):row;control?.focus({preventScroll:true})}
-  $('emptyMessage').hidden=rows.length!==0;renderSort();renderConnection()}
+  const empty = $('emptyMessage');
+  empty.hidden = rows.length !== 0;
+  empty.textContent = state.subscriptionFilterId
+    ? 'No servers in this subscription match the current search.'
+    : 'No configurations found. Use Paste or its menu to add servers.';
+  renderSort();
+  renderConnection();
+}
 function startInlineRename(server, wrap, name, button){
   if(editNameId)return;
   editNameId=server.id;
@@ -537,11 +553,95 @@ function showDialog(id){const target=$(id);for(const dialog of document.querySel
 function confirmAction(title,description,acceptLabel='Delete',keepLabel=null){return new Promise(resolve=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmDescription').textContent=description;$('confirmAccept').textContent=acceptLabel;$('confirmKeep').hidden=!keepLabel;if(keepLabel)$('confirmKeep').textContent=keepLabel;let done=false;const finish=result=>{if(done)return;done=true;dialog.close();dialog.removeEventListener('close',cancel);$('confirmCancel').removeEventListener('click',onCancel);$('confirmClose').removeEventListener('click',onCancel);$('confirmAccept').removeEventListener('click',onYes);$('confirmKeep').removeEventListener('click',onKeep);resolve(result)};const cancel=()=>finish(false),onCancel=()=>finish(false),onYes=()=>finish(true),onKeep=()=>finish('keep');dialog.addEventListener('close',cancel);$('confirmCancel').addEventListener('click',onCancel);$('confirmClose').addEventListener('click',onCancel);$('confirmAccept').addEventListener('click',onYes);$('confirmKeep').addEventListener('click',onKeep);showDialog('confirmDialog')})}
 async function removeServer(id){const s=state.servers.find(x=>x.id===id);if(!s)return;const answer=await confirmAction('Delete configuration?',s.subscriptionId?'This node will be hidden on future subscription updates.':'This manual configuration will be removed from local storage.');if(!answer)return;if(state.connection.state==='connected'&&state.connection.serverId===id){await disconnectConnection();if(state.connection.state==='connected')return}if(safeAction(()=>repo.deleteServer(id)))sync()}
 function openManualDialog(id=null){closePasteMenu();$('manualError').textContent='';state.editingId=id;const s=state.servers.find(x=>x.id===id);$('manualDialogTitle').textContent=s?'Edit configuration':'Add server';$('manualUri').value=s?.uri||'';$('manualName').value=s?.name||'';showDialog('manualDialog');$('manualUri').focus()}
-function openSubscriptionDialog(url=''){closePasteMenu();$('subscriptionError').textContent='';$('subscriptionName').value='';$('subscriptionUrl').value=url;showDialog('subscriptionDialog');$('subscriptionName').focus()}
+function openSubscriptionDialog(url='', subscription=null){
+  closePasteMenu();
+  state.editingSubscriptionId = subscription?.id ?? null;
+  $('subscriptionError').textContent = '';
+  $('subscriptionDialogTitle').textContent = subscription ? 'Edit subscription' : 'Add subscription';
+  $('subscriptionSaveButton').textContent = subscription ? 'Save changes' : 'Save & Update';
+  $('subscriptionSaveButton').disabled = state.updating;
+  $('subscriptionName').value = subscription?.name ?? '';
+  $('subscriptionUrl').value = subscription?.url ?? url;
+  $('subscriptionRefreshHours').value = String(subscription?.autoRefreshHours ?? 0);
+  showDialog('subscriptionDialog');
+  $('subscriptionName').focus();
+}
 function openManager(){closePasteMenu();renderSubscriptionList();showDialog('manageDialog')}
-function sourceName(sub){return sub.name}
-function renderSubscriptionList(){const list=$('subscriptionList');list.replaceChildren();const subscriptions=repo.snapshot().subscriptions;if(!subscriptions.length){const text=document.createElement('p');text.className='manager-empty';text.textContent='No subscriptions yet. Add one by name and URL.';list.append(text);return}for(const sub of subscriptions){const item=document.createElement('div');item.className='subscription-card';const meta=document.createElement('div');meta.className='subscription-meta';const title=document.createElement('strong');title.textContent=sourceName(sub);const info=document.createElement('p');info.textContent=`${state.servers.filter(s=>s.subscriptionId===sub.id).length} servers · ${sub.updatedAt?new Date(sub.updatedAt).toLocaleString():'Not updated yet'}`;meta.append(title,info);if(sub.lastError){const error=document.createElement('p');error.className='sub-error';error.textContent=sub.lastError;meta.append(error)}const controls=document.createElement('div');controls.className='subscription-actions';for(const [text,action,cls] of [['Update',()=>updateSubscription(sub.id),''],['Rename',()=>renameSubscription(item,sub),''],['Delete',()=>removeSubscription(sub.id),'delete-sub']]){const b=document.createElement('button');b.textContent=text;b.className=cls;b.disabled=state.updating;b.addEventListener('click',action);controls.append(b)}item.append(meta,controls);list.append(item)}}
-function renameSubscription(item,sub){const meta=item.querySelector('.subscription-meta');meta.replaceChildren();const input=document.createElement('input');input.value=sub.name;input.maxLength=160;input.setAttribute('aria-label','New subscription name');meta.append(input);const controls=item.querySelector('.subscription-actions');controls.replaceChildren();const save=document.createElement('button');save.textContent='Save';save.addEventListener('click',()=>{if(safeAction(()=>repo.renameSubscription(sub.id,input.value)))sync()});const cancel=document.createElement('button');cancel.textContent='Cancel';cancel.addEventListener('click',renderSubscriptionList);controls.append(save,cancel);input.focus();input.select();input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();save.click()}else if(e.key==='Escape'){e.preventDefault();renderSubscriptionList()}})}
+function renderSubscriptionFilter(subscriptions){
+  const subscription = subscriptions.find(item => item.id === state.subscriptionFilterId);
+  if (!subscription) state.subscriptionFilterId = null;
+  $('clearSubscriptionFilter').hidden = !subscription;
+  $('subscriptionFilterName').textContent = subscription?.name ?? '';
+  $('clearSubscriptionFilter').setAttribute('aria-label',
+    subscription ? `Clear subscription filter: ${subscription.name}` : 'Clear subscription filter');
+}
+function renderSubscriptionList(subscriptions=repo.snapshot().subscriptions){
+  $('subscriptionSaveButton').disabled = state.updating;
+  const list = $('subscriptionList');
+  list.replaceChildren();
+  if (!subscriptions.length) {
+    const text = document.createElement('p');
+    text.className = 'manager-empty';
+    text.textContent = 'No subscriptions yet. Add one by name and URL.';
+    list.append(text);
+    return;
+  }
+  const serverCounts = new Map();
+  for (const {subscriptionId} of state.servers) {
+    if (subscriptionId) serverCounts.set(subscriptionId, (serverCounts.get(subscriptionId) ?? 0) + 1);
+  }
+  for (const sub of subscriptions) {
+    const item = document.createElement('div');
+    item.className = 'subscription-card';
+    const meta = document.createElement('div');
+    meta.className = 'subscription-meta';
+    const titleRow = document.createElement('p');
+    titleRow.className = 'subscription-title-row';
+    const title = document.createElement('button');
+    title.type = 'button';
+    title.className = 'subscription-title';
+    title.textContent = sub.name;
+    title.title = 'Show only servers from this subscription';
+    title.addEventListener('click', () => {
+      state.subscriptionFilterId = sub.id;
+      $('searchInput').value = state.query = '';
+      renderSubscriptionFilter(subscriptions);
+      render();
+      $('manageDialog').close();
+      $('clearSubscriptionFilter').focus();
+    });
+    titleRow.append(title);
+    const info = document.createElement('p');
+    const lastUpdated = sub.updatedAt ? new Date(sub.updatedAt).toLocaleString() : 'Not updated yet';
+    const automatic = sub.autoRefreshHours ? ` · Auto-update every ${sub.autoRefreshHours} h` : '';
+    info.textContent = `${serverCounts.get(sub.id) ?? 0} servers · ${lastUpdated}${automatic}`;
+    meta.append(titleRow, info);
+    if (sub.lastError) {
+      const error = document.createElement('p');
+      error.className = 'sub-error';
+      error.textContent = sub.lastError;
+      error.title = sub.lastError;
+      meta.append(error);
+    }
+    const controls = document.createElement('div');
+    controls.className = 'subscription-actions';
+    for (const [text, action, className] of [
+      ['Update', () => void updateSubscriptions([sub]), ''],
+      ['Edit', () => openSubscriptionDialog('', sub), ''],
+      ['Delete', () => void removeSubscription(sub.id), 'delete-sub'],
+    ]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      button.className = className;
+      button.disabled = state.updating;
+      button.addEventListener('click', action);
+      controls.append(button);
+    }
+    item.append(meta, controls);
+    list.append(item);
+  }
+}
 async function removeSubscription(id){
   const sub=repo.snapshot().subscriptions.find(x=>x.id===id);
   if(!sub)return;
@@ -562,11 +662,75 @@ async function fetchSubscription(url){if(window.__TAURI_INTERNALS__?.invoke)retu
   try{const response=await fetch(url,{signal:controller.signal,redirect:'follow'});if(!response.ok)throw new Error(`HTTP ${response.status}`);if(Number(response.headers.get('content-length'))>2_000_000)throw new Error('Subscription is too large');const result=await response.text();if(result.length>2_000_000)throw new Error('Subscription is too large');return result}
   catch{throw new Error('Subscription download failed. Browser previews may be blocked by CORS; use the desktop app.')}
   finally{clearTimeout(timer)}}
-async function updateSubscription(id){const sub=repo.snapshot().subscriptions.find(s=>s.id===id);if(!sub||state.updating)return null;state.updating=true;renderSubscriptionList();toast(`Updating “${sub.name}”…`);try{const response=await fetchSubscription(sub.url);const stats=repo.refreshSubscription(id,response);sync();toast(`Updated “${sub.name}”: ${stats.added} added, ${stats.retained} retained, ${stats.removed} removed${stats.invalid?`, ${stats.invalid} skipped`:''}`);return stats}
-  catch(e){const reason=errorMessage(e);safeAction(()=>repo.setSubscriptionError(id,reason));toast(`${sub.name}: ${reason}`);return null}
-  finally{state.updating=false;sync()}}
-async function updateAll(){const subscriptions=repo.snapshot().subscriptions;if(!subscriptions.length){toast('No subscriptions to update. Add a subscription first.');return}if(state.updating)return;let ok=0;for(const sub of subscriptions){const result=await updateSubscription(sub.id);if(result)ok++}toast(`Subscription update complete: ${ok}/${subscriptions.length} succeeded`)}
-async function submitSubscription(){const name=$('subscriptionName').value,url=$('subscriptionUrl').value;let created;try{created=repo.addSubscription(name,url)}catch(e){$('subscriptionError').textContent=errorMessage(e);return}sync();$('subscriptionDialog').close();await updateSubscription(created.id);if(state.pendingSubscriptionUrls.length)openSubscriptionDialog(state.pendingSubscriptionUrls.shift())}
+async function updateSubscriptions(subscriptions, {quiet=false, summary=false}={}) {
+  if (state.updating || !subscriptions.length) return;
+  state.updating = true;
+  renderSubscriptionList();
+  let succeeded = 0;
+  try {
+    for (const sub of subscriptions) {
+      if (!quiet) toast(`Updating “${sub.name}”…`);
+      try {
+        const response = await fetchSubscription(sub.url);
+        const stats = repo.refreshSubscription(sub.id, response);
+        succeeded++;
+        if (!quiet) {
+          const skipped = stats.invalid ? `, ${stats.invalid} skipped` : '';
+          toast(`Updated “${sub.name}”: ${stats.added} added, ${stats.retained} retained, ${stats.removed} removed${skipped}`);
+        }
+      } catch (error) {
+        const reason = errorMessage(error);
+        const saveError = () => repo.setSubscriptionError(sub.id, reason);
+        if (quiet) {
+          try { saveError(); } catch { break; }
+        } else {
+          safeAction(saveError);
+          toast(`${sub.name}: ${reason}`);
+        }
+      }
+    }
+  } finally {
+    state.updating = false;
+    sync();
+  }
+  if (summary) toast(`Subscription update complete: ${succeeded}/${subscriptions.length} succeeded`);
+}
+async function updateAll(){
+  const {subscriptions} = repo.snapshot();
+  if (!subscriptions.length) {
+    toast('No subscriptions to update. Add a subscription first.');
+    return;
+  }
+  await updateSubscriptions(subscriptions, {summary:true});
+}
+async function submitSubscription(){
+  if (state.updating) return;
+  const name = $('subscriptionName').value;
+  const url = $('subscriptionUrl').value;
+  const autoRefreshHours = Number($('subscriptionRefreshHours').value);
+  const editingId = state.editingSubscriptionId;
+  let subscription;
+  let shouldUpdate = true;
+  try {
+    if (editingId) {
+      const edited = repo.editSubscription(editingId, {name, url, autoRefreshHours});
+      subscription = edited.subscription;
+      shouldUpdate = edited.urlChanged;
+    } else {
+      subscription = repo.addSubscription(name, url, autoRefreshHours);
+    }
+  } catch (error) {
+    $('subscriptionError').textContent = errorMessage(error);
+    return;
+  }
+  $('subscriptionDialog').close();
+  sync();
+  if (editingId) openManager();
+  if (shouldUpdate) await updateSubscriptions([subscription]);
+  if (!editingId && state.pendingSubscriptionUrls.length && !document.querySelector('dialog[open]')) {
+    openSubscriptionDialog(state.pendingSubscriptionUrls.shift());
+  }
+}
 async function importClipboard(){let text;try{text=await readClipboardText()}catch(e){toast(errorMessage(e));openManualDialog();return}if(!text?.trim()){toast('Clipboard is empty');return}
   const before=repo.rows().length;let result;try{result=repo.importManual(text)}catch(e){toast(errorMessage(e));return}sync();if(result.servers.length)toast(`Added ${repo.rows().length-before} new configuration(s)${result.errors.length?`; ${result.errors.length} unsupported/invalid`:''}`);else if(result.errors.length)toast(`Could not import: ${result.errors[0].reason}`);
   if(result.subscriptionUrls.length){state.pendingSubscriptionUrls=result.subscriptionUrls.slice(1);openSubscriptionDialog(result.subscriptionUrls[0])}
@@ -578,6 +742,12 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(state.appearance==='system')applyTheme()});
   document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'?'desc':'asc'}render()}));
   $('searchInput').addEventListener('input',e=>{state.query=e.target.value;render()});
+  $('clearSubscriptionFilter').addEventListener('click', () => {
+    state.subscriptionFilterId = null;
+    renderSubscriptionFilter([]);
+    render();
+    $('searchInput').focus();
+  });
   $('connectionSwitch').addEventListener('click',()=>void toggleConnection());
   $('activePingButton').addEventListener('click',()=>void testActiveConnection());
   $('repairProxyButton').addEventListener('click',()=>void restoreSystemProxy());
@@ -597,6 +767,10 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   $('phoneTransferButton').disabled=!nativeHost();
   phoneTransferControls({
     invoke:nativeInvoke,showDialog,
+    onSubscription(url){
+      state.pendingSubscriptionUrls = [];
+      openSubscriptionDialog(url);
+    },
     onReceive(link){
       const result=repo.receiveFromPhone(link);
       sync();
@@ -622,6 +796,11 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   $('managerAddButton').addEventListener('click',()=>openSubscriptionDialog());
   $('manualForm').addEventListener('submit',e=>{e.preventDefault();const uri=$('manualUri').value,name=$('manualName').value;try{if(state.editingId)repo.updateManual(state.editingId,uri,name);else repo.addManual({uri,name});$('manualDialog').close();sync();toast('Configuration saved locally')}catch(err){$('manualError').textContent=errorMessage(err)}});
   $('subscriptionForm').addEventListener('submit',e=>{e.preventDefault();void submitSubscription()});
+  if (nativeHost()) setInterval(() => {
+    if (!state.updating && !$('subscriptionDialog').open && !$('confirmDialog').open) {
+      void updateSubscriptions(repo.dueSubscriptions(), {quiet:true});
+    }
+  }, SUBSCRIPTION_CHECK_INTERVAL);
   $('updateButton').addEventListener('click',()=>void updateAll());
   $('pingAllButton').addEventListener('click',()=>{
     if(state.pingBusy){state.pingAbort=true;toast('Cancelling queued tests; active probes will finish')}

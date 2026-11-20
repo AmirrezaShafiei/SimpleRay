@@ -67,13 +67,14 @@
       <div class="toolbar" aria-label="Server actions">
         <div class="toolbar-left">
           <div class="paste-group"><button class="tool-button" id="pasteButton" type="button" title="Import clipboard text"><svg class="ui-icon" aria-hidden="true"><use href="#icon-clipboard"/></svg> Paste</button><button id="pasteMenuButton" class="paste-dropdown" title="Import options" aria-label="Import options" aria-expanded="false" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron"/></svg></button><div class="paste-menu" id="pasteMenu" hidden><button type="button" id="manualAddButton"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg> Add manual configuration</button><button type="button" id="subscriptionAddButton"><svg class="ui-icon" aria-hidden="true"><use href="#icon-link"/></svg> Add subscription</button><button type="button" id="subscriptionManageButton"><svg class="ui-icon" aria-hidden="true"><use href="#icon-list"/></svg> Manage subscriptions</button></div></div>
-          <button class="tool-button" id="phoneTransferButton" type="button" title="Receive a configuration from your phone" aria-label="Receive from phone"><svg class="ui-icon" aria-hidden="true"><use href="#icon-phone"/></svg><span>From phone</span></button>
+          <button class="tool-button" id="phoneTransferButton" type="button" title="Receive a subscription or configuration from your phone" aria-label="Receive from phone"><svg class="ui-icon" aria-hidden="true"><use href="#icon-phone"/></svg><span>From phone</span></button>
           <button class="tool-button" id="updateButton" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-refresh"/></svg> Update</button>
           <button class="tool-button" id="pingAllButton" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-activity"/></svg> <span>Ping <span class="muted-sub">All</span></span></button>
         </div>
         <div class="toolbar-right"><label class="search-wrap"><svg class="ui-icon" aria-hidden="true"><use href="#icon-search"/></svg><input type="search" id="searchInput" placeholder="Search servers..." aria-label="Search servers" /></label><button type="button" id="settingsButton" class="gear-button" aria-label="Settings" title="Settings"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"/></svg></button></div>
       </div>
       <section class="server-section" aria-label="Servers">
+        <button id="clearSubscriptionFilter" type="button" class="tool-button subscription-filter" title="Clear subscription filter" hidden><span id="subscriptionFilterName"></span><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
         <div class="table-scroll"><table id="serversTable"><thead><tr><th><button class="sort-head favorite-head" data-sort="favorite" aria-label="Sort by favorites"><svg class="ui-icon" aria-hidden="true"><use href="#icon-star"/></svg><span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="name">Name <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="type">Type <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="latency">Latency (ms) <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="source">Source <span class="sort-indicator"></span></button></th></tr></thead><tbody id="serverRows"></tbody></table></div>
         <p class="empty-message" id="emptyMessage" hidden>No configurations found. Use Paste or its menu to add servers.</p>
       </section>
@@ -108,7 +109,7 @@
     </div>
   </section>
   <div class="setting-line"><div><strong>Ping All samples</strong><p>Average of two real-delay probes by default</p></div><select id="pingSamples" aria-label="Ping All samples"><option value="1">1 — Single</option><option value="2">2 — Balanced</option><option value="3">3 — Average</option></select></div><div class="setting-line"><div><strong>Server switching</strong><p>Live latency stays on in all modes</p></div><select id="switchMode" aria-label="Server switching"><option value="off">Off</option><option value="suggest">Suggest</option><option value="automatic">Automatic</option></select></div>
-  <div class="setting-line" id="switchSourceRow" hidden><div><strong>Candidate servers</strong><p>Up to 4 candidates, in saved order</p></div><select id="switchSource" aria-label="Candidate servers"><option value="favorites">Favorites</option></select></div>
+  <div class="setting-line" id="switchSourceRow" hidden><div><strong>Candidate servers</strong><p>Up to 6 candidates, in saved order</p></div><select id="switchSource" aria-label="Candidate servers"><option value="favorites">Favorites</option></select></div>
   <div class="setting-line"><div><strong>Start with Windows</strong><p>Launch minimized after Windows sign-in</p></div><input type="checkbox" id="startupToggle" aria-label="Start with Windows" /></div><div class="setting-line"><div><strong>Minimize to tray</strong><p>Closing the main window keeps SimpleRay running</p></div><input type="checkbox" id="trayToggle" aria-label="Minimize to tray" checked /></div><div class="setting-line"><div><strong>Auto-connect on app start</strong><p>Connect last selected server, if available</p></div><input type="checkbox" id="autoConnectToggle" aria-label="Auto-connect on app start" /></div><div class="setting-line"><div><strong>Subscriptions</strong><p>Add, rename, refresh, or delete subscriptions</p></div><button type="button" class="dialog-action" id="settingsSubscriptions">Manage</button></div><div class="setting-line"><strong>Routing</strong><button id="settingsRouting" class="dialog-action" type="button">Manage rules</button></div><p class="settings-footnote">Changes are saved automatically. Connection credentials are still stored in local WebView storage without encryption; use on a trusted Windows profile only. The bundled Xray-core is an independent MPL-2.0 component.</p></dialog>
   <dialog id="routingDialog" class="settings-dialog" aria-labelledby="routingTitle">
     <div class="dialog-heading"><h2 id="routingTitle">Routing</h2><button type="button" class="dialog-close" data-close="routingDialog" aria-label="Close routing">×</button></div>
@@ -151,7 +152,7 @@
       <img id="phoneQr" alt="QR code for the SimpleRay transfer page" width="180" height="180" />
       <div class="phone-qr-instructions">
         <strong>Scan with your phone camera</strong>
-        <p class="field-hint">Paste a share link or WireGuard profile into the phone browser and tap Send.</p>
+        <p class="field-hint">Paste a subscription URL, share link, or WireGuard profile into the phone browser and tap Send.</p>
         <details><summary>Enter the link manually</summary><input id="phoneTransferUrl" aria-label="Local transfer link" readonly /></details>
       </div>
     </div>
@@ -176,14 +177,20 @@
       <div class="dialog-buttons"><button type="button" class="dialog-action secondary" data-close="manualDialog">Cancel</button><button type="submit" class="dialog-action primary">Save</button></div>
     </form>
   </dialog>
-  <dialog id="subscriptionDialog" class="settings-dialog action-dialog" aria-label="Add subscription">
+  <dialog id="subscriptionDialog" class="settings-dialog action-dialog" aria-labelledby="subscriptionDialogTitle">
     <form id="subscriptionForm">
-      <div class="dialog-heading"><div><small>SUBSCRIPTION</small><h2>Add subscription</h2></div><button class="dialog-close" type="button" data-close="subscriptionDialog" aria-label="Close"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
+      <div class="dialog-heading"><div><small>SUBSCRIPTION</small><h2 id="subscriptionDialogTitle">Add subscription</h2></div><button class="dialog-close" type="button" data-close="subscriptionDialog" aria-label="Close"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
       <label class="field-label" for="subscriptionName">Subscription name</label><input id="subscriptionName" required maxlength="160" autocomplete="off" placeholder="e.g. Daily Nodes" />
       <label class="field-label" for="subscriptionUrl">Subscription URL</label><input id="subscriptionUrl" required type="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/subscription" />
-      <p class="field-hint">Every imported server will display this name in its Source column.</p>
+      <label class="field-label" for="subscriptionRefreshHours">Auto-update</label>
+      <select id="subscriptionRefreshHours">
+        <option value="0">Off</option>
+        <option value="6">Every 6 hours</option>
+        <option value="24">Every 24 hours</option>
+      </select>
+      <p class="field-hint">Auto-update runs while SimpleRay is open.</p>
       <p class="form-error" id="subscriptionError" role="alert"></p>
-      <div class="dialog-buttons"><button type="button" class="dialog-action secondary" data-close="subscriptionDialog">Cancel</button><button type="submit" class="dialog-action primary">Save & Update</button></div>
+      <div class="dialog-buttons"><button type="button" class="dialog-action secondary" data-close="subscriptionDialog">Cancel</button><button id="subscriptionSaveButton" type="submit" class="dialog-action primary">Save & Update</button></div>
     </form>
   </dialog>
   <dialog id="manageDialog" class="settings-dialog action-dialog wider-dialog" aria-label="Manage subscriptions">

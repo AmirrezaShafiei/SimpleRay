@@ -6,7 +6,7 @@ pub const LIVE_INTERVAL: Duration = Duration::from_secs(10);
 pub const ROUND_INTERVAL: Duration = Duration::from_secs(30);
 pub const SWITCH_COOLDOWN: Duration = Duration::from_secs(90);
 pub const UNDO_WINDOW: Duration = Duration::from_secs(20);
-pub const MAX_CANDIDATES: usize = 4;
+pub const MAX_CANDIDATES: usize = 6;
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

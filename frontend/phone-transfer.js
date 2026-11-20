@@ -1,6 +1,15 @@
 import qrcode from './vendor/qrcode.js';
+import {validateSubscriptionUrl} from './config.js';
+import {isHttpProxyUrl} from './extra-profiles.js';
 
-export function phoneTransferControls({invoke,showDialog,onReceive,onTest,onConnect}) {
+export function phoneSubscriptionUrl(text) {
+  const link = text.trim();
+  if (!/^https?:\/\//i.test(link) || isHttpProxyUrl(link)) return null;
+  if (/\s/.test(link)) throw new Error('Send one subscription URL at a time');
+  return validateSubscriptionUrl(link);
+}
+
+export function phoneTransferControls({invoke,showDialog,onReceive,onSubscription,onTest,onConnect}) {
   const get=id=>document.getElementById(id);
   const dialog=get('phoneTransferDialog');
   const qrPanel=get('phoneQrPanel');
@@ -95,6 +104,11 @@ export function phoneTransferControls({invoke,showDialog,onReceive,onTest,onConn
         timer=setTimeout(()=>void poll(request,deadline),600);
       } else if(receipt.status==='received') {
         hideCode();
+        const subscriptionUrl = phoneSubscriptionUrl(receipt.link);
+        if (subscriptionUrl) {
+          onSubscription(subscriptionUrl);
+          return;
+        }
         const result=onReceive(receipt.link);
         status(result.duplicate?'Already saved. Testing the existing server…':'Server added. Testing from this computer…');
         const latency=await onTest(result);

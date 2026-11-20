@@ -106,3 +106,53 @@ test('inline rename is a local override retained by subscription refresh',()=>{
   assert.equal(renamed.name,'My alias');
   assert.equal(renamed.uri,uri+'#Changed');
 });
+
+test('editing an existing subscription URL preserves its last-good nodes and favorites',()=>{
+  const storage = memory();
+  const repo = repository(storage);
+  const sub = repo.addSubscription('Daily', 'https://example.org/old');
+  repo.refreshSubscription(sub.id, line('a.test', 'First'));
+  const {id} = repo.rows()[0];
+  repo.toggleFavorite(id);
+  repo.setSelected(id);
+
+  const edited = repo.editSubscription(sub.id, {name:'Daily', url:'https://example.org/new', autoRefreshHours:6});
+  assert.equal(edited.urlChanged, true);
+  assert.equal(edited.subscription.id, sub.id);
+  assert.equal(repo.rows()[0].favorite, true);
+  assert.throws(() => repo.refreshSubscription(sub.id, 'unusable'));
+  assert.equal(repo.rows()[0].id, id);
+
+  const reloaded = repository(storage);
+  assert.equal(reloaded.snapshot().subscriptions[0].url, 'https://example.org/new');
+  const stats = reloaded.refreshSubscription(sub.id, line('a.test', 'Renamed'));
+  assert.equal(stats.retained, 1);
+  assert.equal(reloaded.rows()[0].favorite, true);
+  assert.equal(reloaded.snapshot().selectedId, id);
+
+  const another = reloaded.addSubscription('Another', 'https://example.org/another');
+  assert.throws(() => reloaded.editSubscription(another.id, {name:'Another', url:'https://example.org/new'}), /already saved/);
+  assert.throws(() => reloaded.editSubscription(sub.id, {name:'Daily', url:'https://example.org/new', autoRefreshHours:9}), /Invalid/);
+});
+
+test('auto-update is opt-in and a failed attempt defers the next scheduled refresh',()=>{
+  const storage = memory();
+  const repo = repository(storage);
+  const now = Date.parse('2026-11-20T12:00:00.000Z');
+  const iso = time => new Date(time).toISOString();
+  const hour = 3_600_000;
+  const manual = repo.addSubscription('Manual', 'https://example.org/manual');
+  const everySix = repo.addSubscription('Six', 'https://example.org/six', 6);
+  const daily = repo.addSubscription('Daily', 'https://example.org/daily', 24);
+  repo.refreshSubscription(manual.id, line('manual.test'), iso(now - 48 * hour));
+  repo.refreshSubscription(everySix.id, line('six.test'), iso(now - 7 * hour));
+  repo.refreshSubscription(daily.id, line('day.test'), iso(now - 10 * hour));
+  assert.deepEqual(repo.dueSubscriptions(now).map(item => item.id), [everySix.id]);
+
+  repo.setSubscriptionError(everySix.id, 'Network timeout', iso(now));
+  const reloaded = repository(storage);
+  assert.equal(reloaded.rows().find(server => server.subscriptionId === everySix.id).name, 'Server');
+  assert.deepEqual(reloaded.dueSubscriptions(now + 5 * hour), []);
+  assert.deepEqual(reloaded.dueSubscriptions(now + 6 * hour).map(item => item.id), [everySix.id]);
+  assert.deepEqual(reloaded.dueSubscriptions(now + 14 * hour).map(item => item.id), [everySix.id, daily.id]);
+});
