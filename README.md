@@ -1,43 +1,55 @@
-# SimpleRay — minimal Windows Xray client
+# SimpleRAY
 
-Single-window, no-sidebar V2Ray/Xray client with Dark/Light/System themes, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
+SimpleRAY is a Windows desktop client for Xray. It brings server profiles, subscriptions, latency testing, and quick server switching into one window. You can connect through Windows System Proxy or use TUN to route traffic by app.
 
-> **Status:** Version `0.5.0-beta.4` covers Phases 1–6. The Windows x64 installer and its SHA-256 checksum are attached to the private beta release after the Windows build and installation smoke test pass.
+## Download for Windows
 
-## Features in source
-- Clipboard import of VMess, VLESS, Trojan, Shadowsocks, plus manually named subscriptions and update/rename/delete.
-- Table Source column is subscription name or `—`; numeric colored latency text without boxed badges; sort by clicking any header.
-- Context-menu single-node Ping x1/x3; toolbar Ping All next to Update, default 3 HTTP-through-proxy tests averaged (Settings may select 1).
-- One switch for real connect/disconnect using official Xray-core; live traffic arrows appear only when connected; System Proxy on Windows.
-- System Tray Show / Connect-Disconnect / Exit; closing window hides to tray by default; explicit Exit attempts System Proxy restoration before exit.
-- Start with Windows under HKCU user registry; separate Auto-connect option (OFF by default).
-- Consistent Dark/Light/System themes and a small gear Settings panel.
+**Current release · 0.5.0-beta.11 · Windows x64**
 
-## Test source locally
-- `npm ci` — install locked Tauri CLI build dependencies
-- `npm test` — run Node unit and static checks.
-- `npm run build` — checks source/JS syntax **ONLY**, not native code.
-- `npm run dev` — browser UI preview **without native connections**.
-- `npm run desktop:dev` — requires Windows, Rust/Cargo, MSVC, WebView2, verified official Xray binary staged in `src-tauri/binaries/`.
-- `npm run desktop:build` — Windows NSIS installer (requires those native build dependencies and staged core assets).
+[**Download the Windows installer**](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.11/SimpleRay_0.5.0-beta.11_x64-setup.exe) · [Release notes](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.11) · [SHA-256 checksum](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.11/SHA256SUMS.txt)
 
-For manual Xray staging, use `scripts/stage-xray.ps1` with a separately trusted 64-character SHA256. CI pins official Xray-core v26.11.9.
+The installer bundles Xray-core and Wintun. This is an unsigned beta installer. To verify the download, run `Get-FileHash .\SimpleRay_0.5.0-beta.11_x64-setup.exe -Algorithm SHA256` in PowerShell and compare the hash with `SHA256SUMS.txt`.
 
-## Windows beta pipeline
-- [.github/workflows/windows-beta.yml](.github/workflows/windows-beta.yml) checks the official Xray ZIP SHA-256, validates the Xray fixture, runs JS and Rust tests, builds NSIS, and smoke-tests installation and single-instance startup.
-- The workflow publishes the unsigned setup and checksum directly to [Releases](https://github.com/AmirrezaShafiei/SimpleRay/releases). The preceding beta build produced an installer but could not upload it to Actions artifact storage because its quota was exhausted.
+## Get connected
 
-## Security and limits
-**Sensitive share URIs and subscription URLs are currently stored as plaintext local WebView data. Use only on a trusted Windows user profile. Encrypted OS-backed storage is required before wide public distribution.** This beta has no TUN, split tunnel or browser extension. The NSIS installer is not digitally signed.
+1. Install and open SimpleRAY. Have a server configuration or subscription URL ready.
+2. Import your connection details.
+   - **Single server** — Copy its share link and click **Paste**.
+   - **Subscription** — Open **Paste ▾ → Add subscription**, enter a name and URL, then click **Save & Update**.
+   - **From a phone** — Open **From phone** and scan the QR code on the same trusted Wi-Fi or a personal hotspot. Open the page on your phone, paste the link and tap **Send**. A subscription URL opens **Add subscription** with the URL already filled in.
+3. Select a server and click **Connect**. Use **Ping All** to compare latency before choosing.
 
-## Project handoff
-Read [PROJECT_STATUS.md](PROJECT_STATUS.md), [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), then [PHASE5_REPORT.md](PHASE5_REPORT.md) and [PHASE6_REPORT.md](PHASE6_REPORT.md). Screenshot: [design/reference.jpg](design/reference.jpg).
+Supported imports include VLESS, VMess, Trojan, Shadowsocks, Hysteria2, WireGuard, SOCKS5 and HTTP(S) proxy links. SimpleRAY also accepts WireGuard configuration text.
 
-Core reference: [XTLS/Xray-core](https://github.com/XTLS/Xray-core) (MPL-2.0). V2Fly/V2Ray (MIT) consulted as conceptual reference, not directly copied.
+## Everyday controls
 
-## Version 0.5.0-beta.5 UI enhancements
-- Quick Switch: left click on Tray icon opens searchable compact server list; suggestion in Suggest mode can appear unobtrusively when main window is hidden, with a Switch action. No automatic selection in Suggest mode.
-- Appearance: Ocean, Forest, Violet or Custom (separate Primary + Accent colors). Select Light/Dark/System **independently** of palette.
-- Ping All: **2 successful real-delay attempts averaged by default**, configurable to 1/2/3. Right-click single-server ping also offers x2.
-- UI is still one main window without left sidebar. New quick window is auxiliary and closes automatically on focus loss.
-- Windows artifacts require a successful CI build and manual user-side checks for actual proxy connections.
+- **Subscriptions** — In **Manage subscriptions**, edit a URL, refresh manually, or set an optional refresh every 6 or 24 hours while SimpleRAY is running. Click a subscription name to filter the server list. Refreshes keep Favorites for servers that still match, and a failed refresh preserves the last successful list.
+- **Latency and switching** — **Ping All** supports one, two or three probes, with two by default. With multiple probes, the first result appears immediately, followed by the average of successful probes. **Suggest** asks before switching. **Automatic** can switch on its own. Either mode can test up to six alternatives from Favorites or a chosen subscription.
+- **System tray** — Right-click the tray icon to search for or switch servers, open SimpleRAY, or exit. Closing the main window keeps it running in the tray by default. **Start with Windows** starts the app at sign-in by default. **Auto-connect** is a separate setting and starts off.
+- **Connection status** — The app monitors the active tunnel and can reconnect after sleep or a network change. Use the globe icon beside the connection status to see the server’s exit IP history.
+- **Appearance** — Choose Ocean, Jade, Violet, or a custom palette. Light, Dark, and System appearance work independently of the palette.
+
+## Connection modes
+
+Open **Settings → Routing → Manage rules** to change modes.
+
+| Mode | Traffic it handles | Routing options |
+| --- | --- | --- |
+| **System Proxy** (default) | Apps that use the Windows proxy settings. | Route selected domains directly or through the tunnel. |
+| **TUN (Route by app)** | Traffic at the Windows network level. Launch SimpleRAY as administrator to use it. | Route by app or domain. Optional **Tunnel lock** for apps routed through the tunnel requires Windows Firewall. |
+
+## Troubleshooting
+
+Use **Help → Error report** in the app to preview and copy a diagnostic report. When reporting a problem, include your SimpleRAY version, connection mode, and steps to reproduce it. Keep subscription URLs, share links and credentials out of reports you post. [GitHub Issues](https://github.com/AmirrezaShafiei/SimpleRay/issues)
+
+Configuration and subscription credentials are stored locally without encryption. Use a trusted Windows profile. The QR transfer uses temporary local HTTP, so use it on a trusted network.
+
+## Build from source
+
+The published installer was built from [`v0.5.0-beta.11`](https://github.com/AmirrezaShafiei/SimpleRay/tree/v0.5.0-beta.11). Check out that tag to build the same version.
+
+- `npm ci` installs dependencies. `npm test` runs the JavaScript test suite. `npm run dev` opens a browser preview of the UI.
+- For the native desktop app, use Windows x64 with Node.js 22, Rust, the MSVC C++ build tools and WebView2. Stage the verified Xray-core and Wintun assets using the steps in the [Windows build workflow](https://github.com/AmirrezaShafiei/SimpleRay/blob/v0.5.0-beta.11/.github/workflows/windows-beta.yml).
+- `npm run desktop:dev` runs the native app. `npm run desktop:build` builds the NSIS installer. See the [successful Windows build and installation checks](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44733907920).
+
+The bundled Xray-core is distributed under MPL-2.0. [XTLS/Xray-core](https://github.com/XTLS/Xray-core)
