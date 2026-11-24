@@ -182,12 +182,18 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   --blue:color-mix(in srgb,var(--palette-accent) 46%,#fff);
   --selectedBorder:var(--blue);
 }
+/* Tint the workspace and cards with the primary color, and controls with the accent. */
+:root[data-theme=light],
+:root[data-theme=light][data-palette]{
+  --light-primary:var(--palette-primary,#245995);
+  --light-accent:var(--palette-accent,#3eadef);
+  --bg:color-mix(in srgb,var(--light-primary) 8%,#f8f9fb);
+  --panel:color-mix(in srgb,var(--light-primary) 3%,#fff);
+  --panel2:color-mix(in srgb,var(--light-accent) 16%,#eff6fd);
+  --button:color-mix(in srgb,var(--light-primary) 9%,#f9fbfe);
+}
+:root[data-theme=light] .server-section{background:var(--panel)}
 :root[data-theme=light][data-palette]:not([data-palette=ocean]){
-  --bg:color-mix(in srgb,var(--palette-primary) 12%,#f2f6fc);
-  --outer:color-mix(in srgb,var(--palette-primary) 12%,#e8eef7);
-  --panel:color-mix(in srgb,var(--palette-primary) 14%,#fff);
-  --panel2:color-mix(in srgb,var(--palette-primary) 16%,#f8faff);
-  --button:color-mix(in srgb,var(--palette-primary) 18%,#f7f9ff);
   --selected:color-mix(in srgb,var(--palette-accent) 18%,var(--panel2));
   --blue:color-mix(in srgb,var(--palette-accent) 42%,#000);
 }
