@@ -1,0 +1,27 @@
+name: Promote the verified SimpleRay installer
+on:
+  push:
+    branches: [automation/promote-beta-11]
+    paths: [.github/workflows/promote-beta-11.yml]
+permissions:
+  contents: write
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the existing release and mark it stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v0.5.0-beta.11
+          expected_commit=b26a51e14d5c0cbf8dc978aa84409ddc40d4bd38
+          installer_digest=sha256:e97c24cb85dc9e408ede117fedf0d671388b9682c842250d04e690d8013751ce
+          checksum_digest=sha256:b60779a79bbd564d7a437883a8ec3f61957bf8910fb0a080ea86bafb7ce691ac
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$expected_commit"
+          assets="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[] | [.name,.digest] | @tsv')"
+          grep -Fxq "$(printf '%s\t%s' SimpleRay_0.5.0-beta.11_x64-setup.exe "$installer_digest")" <<< "$assets"
+          grep -Fxq "$(printf '%s\t%s' SHA256SUMS.txt "$checksum_digest")" <<< "$assets"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest --title "SimpleRAY — Stable 1 (Windows x64)"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$tag"
