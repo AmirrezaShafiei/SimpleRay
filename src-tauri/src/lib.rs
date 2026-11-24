@@ -91,10 +91,11 @@ async fn ping_active_connection(app:AppHandle,manager:State<'_,EngineManager>,se
 async fn measure_server_latency(
     app:AppHandle, webview:tauri::Webview, manager:State<'_,EngineManager>,
     outbound:Value, samples:u8, on_first:Option<tauri::ipc::JavaScriptChannelId>, test_id:Option<u32>,
+    extended:Option<bool>,
 )->Result<LatencyResult,String>{
     let progress=on_first.map(|channel|channel.channel_on(webview));
     match test_id {
-        Some(id) => manager.measure_manual_latency(&app,id,outbound,samples,progress).await,
+        Some(id) => manager.measure_manual_latency(&app,id,outbound,samples,progress,extended.unwrap_or(false)).await,
         None => manager.measure_candidate(&app,outbound,samples,progress).await,
     }
 }

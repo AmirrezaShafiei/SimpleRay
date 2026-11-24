@@ -2,7 +2,7 @@ name: SimpleRay Windows beta (candidate)
 
 on:
   push:
-    branches: [main, build/simpleray-beta12]
+    branches: [main, build/simpleray-beta13]
     paths:
       - 'frontend/**'
       - 'src-tauri/**'
@@ -174,14 +174,14 @@ jobs:
             $runKey.Dispose()
             $prefKey.Dispose()
           }
-      - name: Publish the tested beta 12 installer
-        if: github.ref == 'refs/heads/build/simpleray-beta12'
+      - name: Publish the tested beta 13 installer
+        if: github.ref == 'refs/heads/build/simpleray-beta13'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $current = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/build/simpleray-beta12" --jq .object.sha
+          $current = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/build/simpleray-beta13" --jq .object.sha
           if ($LASTEXITCODE -ne 0) { throw 'Could not verify the current beta build commit' }
           if ($current -ne $env:GITHUB_SHA) { Write-Host 'This build was superseded'; exit 0 }
           $version = 'v' + (Get-Content package.json -Raw | ConvertFrom-Json).version
@@ -190,7 +190,7 @@ jobs:
           $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksumFile = Join-Path $installer.DirectoryName 'SHA256SUMS.txt'
           "$checksum  $($installer.Name)" | Set-Content -Path $checksumFile -Encoding ascii
-          gh release create $version $installer.FullName $checksumFile --prerelease --latest=false --target $env:GITHUB_SHA --title "SimpleRay $version (Windows x64)" --notes "Adds download speed tests for up to 10 servers, reply counts for multi-probe pings, shorter manual probe timeouts, native cancellation, and improved contrast in light themes. Includes the tested Windows x64 NSIS installer and its SHA-256 checksum."
+          gh release create $version $installer.FullName $checksumFile --prerelease --latest=false --target $env:GITHUB_SHA --title "SimpleRay $version (Windows x64)" --notes "Multi-probe Ping All uses a 12-second final attempt only if no server answered during the earlier 5-second attempts. Single pings and Speed Test keep the 5-second limit. Cancellation, actual reply counts, and stale server handling were tested. Includes the tested Windows x64 NSIS installer and its SHA-256 checksum."
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the installer' }
           Write-Host "$checksum  $($installer.Name)"
       - name: Publish beta pre-release after successful build and tests

@@ -3,7 +3,7 @@ import {parseImport,parseShareLink} from './config.js';
 import {createRepository} from './store.js';
 import {outboundFromShareLink} from './xray-config.js';
 import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,latencyResponseCount,
-  MAX_SPEED_SERVERS,normalizedLatencyResult,pingPool,SPEED_SAMPLE_MB,speedCandidates} from './runtime.js';
+  MAX_SPEED_SERVERS,normalizedLatencyResult,pingPool,pingWithFallback,SPEED_SAMPLE_MB,speedCandidates} from './runtime.js';
 import {displayServerName,renderFlag} from './flags.js';
 import {phoneTransferControls} from './phone-transfer.js';
 import {attachColorWheel} from './color-wheel.js';
@@ -440,10 +440,10 @@ function downloadView(server) {
   return result?.signature === server.signature ? result : null;
 }
 
-async function measureLatency(server,samples,testId,onFirst) {
+async function measureLatency(server,samples,testId,extended,onFirst) {
   const outbound=outboundFromShareLink(server.uri);
   const ipc=window.__TAURI_INTERNALS__;
-  const args = {outbound, samples, testId};
+  const args = {outbound, samples, testId, extended};
   if(samples===1||!ipc.transformCallback)return nativeInvoke('measure_server_latency',args);
   const callback=ipc.transformCallback(({message})=>{
     if(message)onFirst(normalizedLatencyResult(message,1));
@@ -499,30 +499,48 @@ async function testServers(servers,samples,kind){
     else pingFeedback.clear();
     render();
     const pingResults = new Map();
-    const summary = await pingPool(servers,samples,
-      server => measureLatency(server, samples, job.id, first => {
-        if (serverTest !== job || job.cancelled || !currentServer(server)) return;
-        pingFeedback.set(server.id, {...first, signature: server.signature, provisional: true});
-        render();
-      }),
-      (server,result,done,total)=>{
-        if (serverTest !== job) return;
-        if (currentServer(server)) {
-          if (speed) {
-            if (Number.isFinite(result.latency)) pingResults.set(server.id, result.latency);
-          } else {
-            pingFeedback.delete(server.id);
-            if (result.latencyStatus === 'cancelled') {
-              pingFeedback.set(server.id, {...result, signature: server.signature});
-            } else {
-              safeAction(() => repo.setLatency(server.id, result));
-              state.servers = repo.rows();
-            }
-            render();
-          }
-        }
+    const showFirst = (server, first) => {
+      if (serverTest !== job || job.cancelled || !currentServer(server) || !Number.isFinite(first.latency)) return;
+      pingFeedback.set(server.id, {...first, signature: server.signature, provisional: true});
+      render();
+    };
+    const runOne = (server, count, extended = false) => measureLatency(server, count, job.id, extended, first => showFirst(server, first));
+    const onResult = (server, result) => {
+      if (serverTest !== job || !currentServer(server)) return;
+      if (speed) {
+        if (Number.isFinite(result.latency)) pingResults.set(server.id, result.latency);
+        return;
+      }
+      pingFeedback.delete(server.id);
+      if (result.latencyStatus === 'cancelled') {
+        pingFeedback.set(server.id, {...result, signature: server.signature});
+      } else {
+        safeAction(() => repo.setLatency(server.id, result));
+        state.servers = repo.rows();
+      }
+      render();
+    };
+    const options = {concurrency: 3, shouldStop: () => job.cancelled};
+    let summary;
+    if (samples > 1) {
+      summary = await pingWithFallback(servers, samples, runOne, onResult, {
+        ...options,
+        isCurrent: currentServer,
+        onPreliminary(server, result) {
+          if (!pingFeedback.has(server.id)) showFirst(server, result);
+        },
+        onStage(done, total, final, extended) {
+          if (job.cancelled) return;
+          const label = final ? (extended ? 'Final ping · 12 s timeout' : 'Final ping') : 'Pinging';
+          notice.textContent = `${label} · ${done}/${total}`;
+        },
+      });
+    } else {
+      summary = await pingPool(servers,samples,runOne,(server, result, done, total) => {
+        onResult(server, result);
         if (!job.cancelled) notice.textContent = `Pinging ${done}/${total}${budget}`;
-      }, {concurrency: 3, shouldStop: () => job.cancelled});
+      }, options);
+    }
     if (speed && !job.cancelled) {
       await runSpeedDownloads(job, servers.filter(currentServer), pingResults);
     } else {

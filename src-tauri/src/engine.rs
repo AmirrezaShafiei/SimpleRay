@@ -24,6 +24,15 @@ const PROBE_TIMEOUT:Duration=Duration::from_secs(9);
 const PRIMARY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MANUAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MANUAL_PRIMARY_TIMEOUT: Duration = Duration::from_secs(2);
+const EXTENDED_PROBE_TIMEOUT: Duration = Duration::from_secs(12);
+const PROBE_TIMED_OUT: &str = "Proxy request timed out";
+
+#[derive(Clone, Copy)]
+enum ProbeMode {
+    Standard,
+    Manual,
+    Extended,
+}
 
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -264,41 +273,89 @@ async fn probe_round(port: u16) -> Result<Probe, String> {
     probe_round_with_timeout(port, PRIMARY_PROBE_TIMEOUT).await
 }
 
-async fn probe_round_with_timeout(port:u16, primary_timeout:Duration)->Result<Probe,String>{
+fn probe_client(port: u16, request_timeout: Duration) -> Result<reqwest::Client, String> {
     let proxy=reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
         .map_err(|_|"Cannot configure local HTTP proxy probe")?;
-    let client=reqwest::Client::builder().proxy(proxy).timeout(PROBE_TIMEOUT)
+    reqwest::Client::builder().proxy(proxy).timeout(request_timeout)
         .redirect(reqwest::redirect::Policy::none()).pool_max_idle_per_host(0)
-        .build().map_err(|_|"Could not create HTTP probe")?;
+        .build().map_err(|_|"Could not create HTTP probe".into())
+}
+
+async fn trace_probe(client: &reqwest::Client) -> Option<Probe> {
     let start=Instant::now();
-    let primary=async {
-        let mut response=client.get(TRACE_URL).header(reqwest::header::CONNECTION,"close").send().await.ok()?;
-        if response.status()!=reqwest::StatusCode::OK {return None}
-        let mut text=Vec::new();
-        while let Some(chunk)=response.chunk().await.ok()? {
-            if text.len()+chunk.len()>8192 {return None}
-            text.extend_from_slice(&chunk);
-        }
-        trace_address(std::str::from_utf8(&text).ok()?)
-    };
-    if let Some(ip)=timeout(primary_timeout,primary).await.ok().flatten() {
-        return Ok(Probe{elapsed_ms:start.elapsed().as_millis().max(1) as u64,ip:Some(ip)});
+    let mut response=client.get(TRACE_URL).header(reqwest::header::CONNECTION,"close").send().await.ok()?;
+    if response.status()!=reqwest::StatusCode::OK {return None}
+    let mut text=Vec::new();
+    while let Some(chunk)=response.chunk().await.ok()? {
+        if text.len()+chunk.len()>8192 {return None}
+        text.extend_from_slice(&chunk);
     }
+    let ip = trace_address(std::str::from_utf8(&text).ok()?)?;
+    Some(Probe{elapsed_ms:start.elapsed().as_millis().max(1) as u64,ip:Some(ip)})
+}
+
+async fn backup_probe(client: &reqwest::Client) -> Result<Probe, String> {
     let start=Instant::now();
     let response=client.get(PROBE_URL).header(reqwest::header::CONNECTION,"close").send().await
-        .map_err(|error|if error.is_timeout(){"Proxy request timed out"}else{"Proxy request failed"})?;
+        .map_err(|error|if error.is_timeout(){PROBE_TIMED_OUT}else{"Proxy request failed"})?;
     if response.status()!=reqwest::StatusCode::NO_CONTENT{
         return Err("Proxy probe did not return HTTP 204".into());
     }
     Ok(Probe{elapsed_ms:start.elapsed().as_millis().max(1) as u64,ip:None})
 }
-async fn probe_once(port: u16, manual: bool) -> Result<u64, String> {
-    let probe = if manual {
-        timeout(MANUAL_PROBE_TIMEOUT, probe_round_with_timeout(port, MANUAL_PRIMARY_TIMEOUT))
+
+async fn probe_round_with_timeout(port: u16, primary_timeout: Duration) -> Result<Probe, String> {
+    let client = probe_client(port, PROBE_TIMEOUT)?;
+    if let Some(probe) = timeout(primary_timeout, trace_probe(&client)).await.ok().flatten() {
+        return Ok(probe);
+    }
+    backup_probe(&client).await
+}
+
+async fn extended_probe(port: u16) -> Result<Probe, String> {
+    let client = probe_client(port, EXTENDED_PROBE_TIMEOUT)?;
+    // Keep waiting on the first destination while the backup is testing.
+    // This gives either destination time to report a genuinely slow response.
+    extended_probe_with(trace_probe(&client), || backup_probe(&client), MANUAL_PRIMARY_TIMEOUT).await
+}
+
+async fn extended_probe_with<P, B, F>(primary: P, start_backup: B, head_start: Duration) -> Result<Probe, String>
+where
+    P: std::future::Future<Output = Option<Probe>>,
+    B: FnOnce() -> F,
+    F: std::future::Future<Output = Result<Probe, String>>,
+{
+    tokio::pin!(primary);
+    tokio::select! {
+        response = &mut primary => return match response {
+            Some(probe) => Ok(probe),
+            None => start_backup().await,
+        },
+        _ = sleep(head_start) => {},
+    }
+    let backup = start_backup();
+    tokio::pin!(backup);
+    tokio::select! {
+        response = &mut primary => match response {
+            Some(probe) => Ok(probe),
+            None => backup.await,
+        },
+        response = &mut backup => match response {
+            Ok(probe) => Ok(probe),
+            Err(error) => primary.await.ok_or(error),
+        },
+    }
+}
+
+async fn probe_once(port: u16, mode: ProbeMode) -> Result<u64, String> {
+    let probe = match mode {
+        ProbeMode::Standard => probe_round(port).await?,
+        ProbeMode::Manual => timeout(MANUAL_PROBE_TIMEOUT, probe_round_with_timeout(port, MANUAL_PRIMARY_TIMEOUT))
             .await
-            .map_err(|_| "Proxy request timed out")??
-    } else {
-        probe_round(port).await?
+            .map_err(|_| PROBE_TIMED_OUT)??,
+        ProbeMode::Extended => timeout(EXTENDED_PROBE_TIMEOUT, extended_probe(port))
+            .await
+            .map_err(|_| PROBE_TIMED_OUT)??,
     };
     Ok(probe.elapsed_ms)
 }
@@ -819,7 +876,7 @@ impl EngineManager {
     )->Result<LatencyResult,String>{
         let _permit=self.candidate_probes.acquire().await.map_err(|_|"Latency tester unavailable")?;
         let core = start_xray(app, outbound, false, None).await?;
-        let result = sample_latency(core.proxy_port, samples, progress, false).await;
+        let result = sample_latency(core.proxy_port, samples, progress, ProbeMode::Standard).await;
         kill(core).await;
         result
     }
@@ -838,9 +895,13 @@ impl EngineManager {
 
     pub async fn measure_manual_latency(
         &self, app: &AppHandle, id: u32, outbound: Value, samples: u8,
-        progress: Option<tauri::ipc::Channel<LatencyResult>>,
+        progress: Option<tauri::ipc::Channel<LatencyResult>>, extended: bool,
     ) -> Result<LatencyResult, String> {
-        self.with_manual_proxy(app, id, outbound, |port| sample_latency(port, samples, progress, true)).await
+        if extended && samples != 1 {
+            return Err("The extended ping must be a single attempt".into());
+        }
+        let mode = if extended { ProbeMode::Extended } else { ProbeMode::Manual };
+        self.with_manual_proxy(app, id, outbound, |port| sample_latency(port, samples, progress, mode)).await
     }
 
     pub async fn measure_manual_download(
@@ -920,13 +981,13 @@ fn latency_result(values:Vec<u64>, attempted:u8, reason:Option<String>)->Latency
 }
 
 async fn sample_latency(
-    port:u16,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,manual:bool,
+    port:u16,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,mode:ProbeMode,
 )->Result<LatencyResult,String>{
     if !(1..=3).contains(&samples){return Err("Ping measurements must be 1, 2 or 3".into())}
     let mut values=Vec::with_capacity(samples.into());
     let mut reason=None;
     for attempt in 1..=samples{
-        match probe_once(port,manual).await{
+        match probe_once(port,mode).await{
             Ok(ms)=>{
                 values.push(ms);
                 if values.len()==1 && attempt<samples {
@@ -946,6 +1007,25 @@ async fn sample_latency(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn extended_probe_accepts_a_late_primary_if_backup_fails() {
+        let primary = async {
+            sleep(Duration::from_millis(25)).await;
+            Some(Probe { elapsed_ms: 8_000, ip: None })
+        };
+        let result = extended_probe_with(primary, || async { Err("Backup failed".into()) }, Duration::ZERO).await;
+        assert_eq!(result.unwrap().elapsed_ms, 8_000);
+    }
+
+    #[tokio::test]
+    async fn extended_probe_accepts_a_backup_while_primary_is_pending() {
+        let result = extended_probe_with(
+            std::future::pending(),
+            || async { Ok(Probe { elapsed_ms: 8_000, ip: None }) },
+            Duration::ZERO,
+        ).await;
+        assert_eq!(result.unwrap().elapsed_ms, 8_000);
+    }
     #[test]
     fn latency_average_uses_successful_probes_and_keeps_attempt_count() {
         let result=latency_result(vec![203,300],3,None);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {bytesPerSecond,formatBytes,latencyResponseCount,normalizedLatencyResult,pingPool,speedCandidates} from '../frontend/runtime.js';
+import {bytesPerSecond,formatBytes,latencyResponseCount,normalizedLatencyResult,pingPool,pingWithFallback,speedCandidates} from '../frontend/runtime.js';
 test('measured traffic display units, zero and unavailable',()=>{
   assert.equal(bytesPerSecond(0),'0 B/s');
   assert.equal(bytesPerSecond(2048),'2.00 KB/s');
@@ -78,4 +78,107 @@ test('only the ten lowest fresh pings qualify for the download test', () => {
   const result = speedCandidates(servers, pings);
   assert.equal(result.count, 12);
   assert.deepEqual(result.candidates.map(server => server.id), servers.slice(1, 11).map(server => server.id));
+});
+
+const probeResult = (attempted, ...times) => ({
+  attempted, samplesMs: times, successful: times.length,
+  averageMs: times.length ? Math.round(times.reduce((sum, time) => sum + time, 0) / times.length) : null,
+  reason: times.length ? null : 'Proxy request timed out',
+});
+const fallbackOptions = {
+  concurrency: 1, shouldStop: () => false, isCurrent: () => true,
+  onStage() {}, onPreliminary() {},
+};
+
+test('one fast reply anywhere in the list keeps all final probes short', async () => {
+  const servers = [{id: 'slow'}, {id: 'fast'}];
+  const calls = [];
+  const results = new Map();
+  await pingWithFallback(servers, 3, (server, count, extended) => {
+    calls.push([server.id, count, extended]);
+    if (server.id === 'slow') return probeResult(count);
+    return count === 2 ? probeResult(2, 201, 202) : probeResult(1, 205);
+  }, (server, result) => results.set(server.id, result), fallbackOptions);
+  assert.deepEqual(calls, [
+    ['slow', 2, false], ['fast', 2, false], ['slow', 1, false], ['fast', 1, false],
+  ]);
+  assert.equal(results.get('fast').latency, 203);
+  assert.equal(latencyResponseCount(results.get('fast')), '3/3');
+  assert.equal(latencyResponseCount(results.get('slow')), '0/3');
+});
+
+for (const samples of [2, 3]) {
+  test(`only the final probe can wait longer when all ${samples - 1} fast rounds miss`, async () => {
+    const calls = [];
+    const results = new Map();
+    const report = await pingWithFallback([{id: 'slow'}, {id: 'invalid'}], samples, (server, count, extended) => {
+      calls.push([server.id, count, extended]);
+      if (server.id === 'invalid') throw Error('Xray could not start');
+      return extended ? probeResult(1, 8000) : probeResult(count);
+    }, (server, result) => results.set(server.id, result), fallbackOptions);
+    assert.deepEqual(calls, [
+      ['slow', samples - 1, false], ['invalid', samples - 1, false], ['slow', 1, true],
+    ]);
+    assert.equal(report.finished, 2);
+    assert.equal(results.get('slow').latency, 8000);
+    assert.equal(latencyResponseCount(results.get('slow')), `1/${samples}`);
+    assert.equal(latencyResponseCount(results.get('invalid')), '');
+  });
+}
+
+test('cancelling between phases or during the final phase stops queued probes', async () => {
+  for (const duringFinal of [false, true]) {
+    let stop = false;
+    const servers = [{id: 'a'}, {id: 'b'}, {id: 'c'}];
+    const finalCalls = [];
+    const results = new Map();
+    const summary = await pingWithFallback(servers, 2, (server, count, extended) => {
+      if (!extended) return probeResult(count);
+      finalCalls.push(server.id);
+      if (server.id === 'a') return probeResult(1, 8000);
+      stop = true;
+      throw Error('Test cancelled');
+    }, (server, result) => results.set(server.id, result), {
+      ...fallbackOptions,
+      shouldStop: () => stop,
+      onStage(done, total, final) {
+        if (!duringFinal && done === total && !final) stop = true;
+      },
+    });
+    assert.deepEqual(finalCalls, duringFinal ? ['a', 'b'] : []);
+    assert.equal(summary.cancelled, true);
+    assert.equal(summary.finished, duringFinal ? 1 : 0);
+    assert.equal(results.get('a').latencyStatus, duringFinal ? 'partial' : 'cancelled');
+    assert.equal(results.get('b').latencyStatus, 'cancelled');
+    assert.equal(results.get('c').latencyStatus, 'cancelled');
+  }
+});
+
+test('removed servers do not decide the final timeout or receive a final probe', async () => {
+  const servers = [{id: 'removed'}, {id: 'current'}];
+  const current = new Set(servers);
+  const finalCalls = [];
+  await pingWithFallback(servers, 2, (server, count, extended) => {
+    if (extended) finalCalls.push(server.id);
+    return server.id === 'removed' ? probeResult(count, 100) : probeResult(count);
+  }, () => {}, {
+    ...fallbackOptions,
+    isCurrent: server => current.has(server),
+    onStage(done, total, final) {
+      if (!final && done === total) current.delete(servers[0]);
+    },
+  });
+  assert.deepEqual(finalCalls, ['current']);
+});
+
+test('a failed final startup retains only real attempts', async () => {
+  let first = true;
+  let result;
+  await pingWithFallback([{id: 'a'}], 3, () => {
+    if (!first) throw Error('Xray could not restart');
+    first = false;
+    return probeResult(2, 500);
+  }, (_server, value) => { result = value; }, fallbackOptions);
+  assert.equal(result.latency, 500);
+  assert.equal(latencyResponseCount(result), '1/2');
 });
