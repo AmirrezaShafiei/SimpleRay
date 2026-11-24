@@ -11,6 +11,7 @@ struct RoutingGuard(tokio::sync::Mutex<()>);
 mod preferences;
 mod tray;
 mod engine;
+mod manual_ping;
 mod switching;
 mod phone_transfer;
 use engine::{EngineManager,ConnectionStatus,LatencyResult};
@@ -89,10 +90,28 @@ async fn ping_active_connection(app:AppHandle,manager:State<'_,EngineManager>,se
 #[tauri::command]
 async fn measure_server_latency(
     app:AppHandle, webview:tauri::Webview, manager:State<'_,EngineManager>,
-    outbound:Value, samples:u8, on_first:Option<tauri::ipc::JavaScriptChannelId>,
+    outbound:Value, samples:u8, on_first:Option<tauri::ipc::JavaScriptChannelId>, test_id:Option<u32>,
+    extended:Option<bool>,
 )->Result<LatencyResult,String>{
     let progress=on_first.map(|channel|channel.channel_on(webview));
-    manager.measure_candidate(&app,outbound,samples,progress).await
+    match test_id {
+        Some(id) => manager.measure_manual_latency(&app,id,outbound,samples,progress,extended.unwrap_or(false)).await,
+        None => manager.measure_candidate(&app,outbound,samples,progress).await,
+    }
+}
+#[tauri::command]
+async fn begin_manual_ping(manager: State<'_, EngineManager>) -> Result<u32, String> {
+    manager.begin_manual_ping().await
+}
+#[tauri::command]
+async fn cancel_manual_ping(manager: State<'_, EngineManager>, test_id: u32) -> Result<(), String> {
+    manager.cancel_manual_ping(test_id).await;
+    Ok(())
+}
+#[tauri::command]
+async fn finish_manual_ping(manager: State<'_, EngineManager>, test_id: u32) -> Result<(), String> {
+    manager.finish_manual_ping(test_id).await;
+    Ok(())
 }
 #[tauri::command]
 async fn configure_server_switching(manager:State<'_,EngineManager>,mode:switching::SwitchMode,candidates:Vec<switching::Profile>)->Result<(),String>{
@@ -237,6 +256,7 @@ pub fn run(){
             phone_transfer_addresses,start_phone_transfer,poll_phone_transfer,cancel_phone_transfer,
             connect_server,disconnect_server,connection_status,restore_system_proxy,
             ping_active_connection,measure_server_latency,
+            begin_manual_ping,cancel_manual_ping,finish_manual_ping,
             configure_server_switching,accept_server_suggestion,undo_server_switch,
             dismiss_tray_suggestion,accept_tray_suggestion,tray_panel_action,publish_tray_panel,retry_tray_connection,
             get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window,

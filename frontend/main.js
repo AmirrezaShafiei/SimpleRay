@@ -2,7 +2,7 @@ import {filterServers,sortServers,latencyClass,stabilityLevel,SORT_COLUMNS} from
 import {parseImport,parseShareLink} from './config.js';
 import {createRepository} from './store.js';
 import {outboundFromShareLink} from './xray-config.js';
-import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,normalizedLatencyResult,pingPool} from './runtime.js';
+import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,latencyResponseCount,normalizedLatencyResult,pingPool,pingWithFallback} from './runtime.js';
 import {displayServerName,renderFlag} from './flags.js';
 import {phoneTransferControls} from './phone-transfer.js';
 import {attachColorWheel} from './color-wheel.js';
@@ -19,7 +19,7 @@ const switching={
 let lastSwitchConfig;
 let configUpdate=Promise.resolve();
 const SUBSCRIPTION_CHECK_INTERVAL = 60_000;
-const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,editingSubscriptionId:null,subscriptionFilterId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,editingSubscriptionId:null,subscriptionFilterId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -30,7 +30,8 @@ let activePing;
 let editNameId;
 let colorWheel;
 let routingEditor;
-const firstPingResults=new Map();
+let pingJob;
+const pingFeedback = new Map();
 const trayPanel={visible:false,lastSnapshot:'',lastServer:null,mode:'systemProxy',error:''};
 
 
@@ -423,51 +424,117 @@ async function respondToSwitch(undo){
 
 function latencyView(server) {
   if(!server)return null;
-  const first=firstPingResults.get(server.id);
-  return first?.signature===server.signature&&first ? {...server,...first,provisional:true} : server;
+  const feedback = pingFeedback.get(server.id);
+  return feedback?.signature === server.signature ? {...server, ...feedback} : server;
 }
 
-async function measureLatency(server,samples,onFirst) {
+function currentServer(server) {
+  return state.servers.some(row => row.id === server.id && row.signature === server.signature);
+}
+
+async function measureLatency(server,samples,testId,extended,onFirst) {
   const outbound=outboundFromShareLink(server.uri);
   const ipc=window.__TAURI_INTERNALS__;
-  if(samples===1||!ipc.transformCallback)return nativeInvoke('measure_server_latency',{outbound,samples});
+  const args = {outbound, samples, testId, extended};
+  if(samples===1||!ipc.transformCallback)return nativeInvoke('measure_server_latency',args);
   const callback=ipc.transformCallback(({message})=>{
     if(message)onFirst(normalizedLatencyResult(message,1));
   });
   try {
-    return await nativeInvoke('measure_server_latency',{outbound,samples,onFirst:`__CHANNEL__:${callback}`});
+    return await nativeInvoke('measure_server_latency',{...args,onFirst:`__CHANNEL__:${callback}`});
   } finally {
     ipc.unregisterCallback(callback);
   }
 }
+async function cancelPing() {
+  const job = pingJob;
+  if (!job || job.cancelled) return;
+  job.cancelled = true;
+  $('pingAllButton').disabled = true;
+  $('runtimeNotice').textContent = 'Cancelling pings…';
+  if (job.id !== undefined) {
+    try { await nativeInvoke('cancel_manual_ping', {testId: job.id}); }
+    catch (error) { toast(errorMessage(error)); }
+  }
+}
+
 async function pingServers(servers,samples){
   if(!nativeHost()){toast('Real latency testing requires the native app and Xray-core');return}
-  if(state.pingBusy){toast('A latency test is already running');return}
+  if(pingJob){toast('A latency test is already running');return}
   if(!servers.length){toast('No configurations to test');return}
-  state.pingBusy=true;state.pingAbort=false;
-  const button=$('pingAllButton');
-  button.setAttribute('aria-busy','true');button.innerHTML=`${icon('close')} <span>Cancel ping</span>`;
-  try{
-    const summary=await pingPool(servers,samples,
-      server=>measureLatency(server,samples,first=>{
-        if(state.servers.some(s=>s.id===server.id&&s.signature===server.signature)){
-          firstPingResults.set(server.id,{...first,signature:server.signature});
-          render();
-        }
-      }),
-      (server,result,done,total)=>{
-        firstPingResults.delete(server.id);
-        // A subscription refresh may have removed this entry while probing.
-        if(state.servers.some(s=>s.id===server.id&&s.signature===server.signature)){
-          safeAction(()=>repo.setLatency(server.id,result));
-          state.servers=repo.rows();
-          render();
-        }
-        $('runtimeNotice').textContent=`Latency tested: ${done}/${total} · ${samples} probe${samples===1?'':'s'} per server`;
-      },{concurrency:3,shouldStop:()=>state.pingAbort});
-    toast(`Real-delay tests ${summary.cancelled?'cancelled':'completed'}: ${summary.finished}/${summary.total}`);
-  }catch(err){toast(errorMessage(err))}
-  finally{firstPingResults.clear();state.pingBusy=false;state.pingAbort=false;button.removeAttribute('aria-busy');button.innerHTML=`${icon('activity')} <span>Ping <span class="muted-sub">All</span></span>`;}
+  const button = $('pingAllButton');
+  const label = button.innerHTML;
+  const notice = $('runtimeNotice');
+  const job = {cancelled: false};
+  pingJob = job;
+  button.setAttribute('aria-busy', 'true');
+  button.innerHTML = `${icon('close')} <span>Cancel ping</span>`;
+  notice.textContent = `Pinging 0/${servers.length}`;
+  try {
+    job.id = await nativeInvoke('begin_manual_ping');
+    if (job.cancelled) {
+      notice.textContent = 'Ping cancelled';
+      return;
+    }
+    pingFeedback.clear();
+    render();
+    const showFirst = (server, first) => {
+      if (pingJob !== job || job.cancelled || !currentServer(server) || !Number.isFinite(first.latency)) return;
+      pingFeedback.set(server.id, {...first, signature: server.signature, provisional: true});
+      render();
+    };
+    const runOne = (server, count, extended = false) =>
+      measureLatency(server, count, job.id, extended, first => showFirst(server, first));
+    const onResult = (server, result) => {
+      if (pingJob !== job || !currentServer(server)) return;
+      pingFeedback.delete(server.id);
+      if (result.latencyStatus === 'cancelled') {
+        pingFeedback.set(server.id, {...result, signature: server.signature});
+      } else {
+        safeAction(() => repo.setLatency(server.id, result));
+        state.servers = repo.rows();
+      }
+      render();
+    };
+    const options = {concurrency: 3, shouldStop: () => job.cancelled};
+    let summary;
+    if (samples > 1) {
+      summary = await pingWithFallback(servers, samples, runOne, onResult, {
+        ...options,
+        isCurrent: currentServer,
+        onPreliminary(server, result) {
+          if (!pingFeedback.has(server.id)) showFirst(server, result);
+        },
+        onStage(done, total, final, extended) {
+          if (job.cancelled) return;
+          const stage = final ? (extended ? 'Final ping · 10 s timeout' : 'Final ping') : 'Pinging';
+          notice.textContent = `${stage} · ${done}/${total}`;
+        },
+      });
+    } else {
+      summary = await pingPool(servers,samples,runOne,(server, result, done, total) => {
+        onResult(server, result);
+        if (!job.cancelled) notice.textContent = `Pinging ${done}/${total}`;
+      }, options);
+    }
+    notice.textContent = `Ping ${summary.cancelled?'cancelled':'complete'} · ${summary.finished}/${summary.total} tested`;
+  } catch (error) {
+    notice.textContent = job.cancelled ? 'Ping cancelled' : errorMessage(error);
+  } finally {
+    try {
+      if (job.id !== undefined) await nativeInvoke('finish_manual_ping', {testId: job.id});
+    } catch (error) {
+      toast(errorMessage(error));
+    }
+    pingJob = undefined;
+    button.removeAttribute('aria-busy');
+    button.disabled = false;
+    button.innerHTML = label;
+    for (const [id, feedback] of pingFeedback) {
+      if (feedback.provisional) pingFeedback.delete(id);
+    }
+    render();
+  }
 }
 
 function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').innerHTML=icon(active?(state.sortDirection==='asc'?'up':'down'):'sort');btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
@@ -497,7 +564,22 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
     wrap.addEventListener('dblclick',e=>{if(e.target.closest('button,input'))e.stopPropagation()});
     wrap.append(flag,name,rename);nameCell.append(wrap);
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
-    const latencyCell=tr.insertCell();const latency=document.createElement('span');latency.className='latency-text '+latencyClass(s.latency);latency.textContent=typeof s.latency==='number'?`${s.latency}`:s.latencyStatus==='timeout'?'Timeout':s.latencyStatus==='error'?'Failed':'—';latency.dataset.provisional=String(Boolean(s.provisional));latency.title=s.provisional?'First probe · waiting for the average':s.latencyAttempted?`${s.latencySuccess||0}/${s.latencyAttempted} successful real-delay probes`: 'Not measured';latencyCell.append(latency);
+    const latencyCell = tr.insertCell();
+    const latency = document.createElement('span');
+    const labels = {timeout: 'Timeout', error: 'Failed', 'probe-failed': 'Failed', 'start-failed': 'Failed to start', cancelled: 'Cancelled'};
+    latency.className = 'latency-text ' + latencyClass(s.latency);
+    latency.textContent = Number.isFinite(s.latency) ? String(s.latency) : labels[s.latencyStatus] ?? '—';
+    latency.dataset.provisional = String(Boolean(s.provisional));
+    if (s.provisional) latency.title = 'First reply · waiting for the average';
+    latencyCell.append(latency);
+    const count = latencyResponseCount(s);
+    if (count) {
+      const responses = document.createElement('span');
+      responses.className = 'muted-sub';
+      responses.textContent = ' · ' + count;
+      responses.title = `${s.latencySuccess} replies out of ${s.latencyAttempted} probes`;
+      latencyCell.append(responses);
+    }
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
     tr.addEventListener('click',()=>setSelected(s.id));tr.addEventListener('dblclick',()=>{setSelected(s.id);void connectSelected(s.id)});
     tr.addEventListener('contextmenu',e=>{e.preventDefault();setSelected(s.id);showContextMenu(s.id,e.clientX,e.clientY)});
@@ -803,7 +885,7 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   }, SUBSCRIPTION_CHECK_INTERVAL);
   $('updateButton').addEventListener('click',()=>void updateAll());
   $('pingAllButton').addEventListener('click',()=>{
-    if(state.pingBusy){state.pingAbort=true;toast('Cancelling queued tests; active probes will finish')}
+    if(pingJob)void cancelPing();
     else void pingServers(state.servers,state.pingSamples);
   });
   routingEditor=createRoutingEditor({invoke:nativeInvoke,showDialog,nativeHost,onSaved:async changed=>{
