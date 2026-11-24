@@ -8,7 +8,7 @@ export const DEMO_SERVERS = Object.freeze([
   {id:'demo-sg',flag:'🇸🇬',name:'Singapore 01',type:'Shadowsocks',latency:236,source:'—',favorite:false},
   {id:'demo-jp',flag:'🇯🇵',name:'Japan 01',type:'VMess',latency:289,source:'Daily Nodes',favorite:false},
 ]);
-export const SORT_COLUMNS = Object.freeze(['favorite','name','type','latency','source']);
+export const SORT_COLUMNS = Object.freeze(['favorite','name','type','latency','downloadMbps','source']);
 export function filterServers(servers,query='') {
   const term=query.trim().toLocaleLowerCase();
   if(!term)return [...servers];
@@ -18,10 +18,10 @@ export function sortServers(servers,key,direction='asc') {
   const sign=direction==='desc'?-1:1;
   return servers.map((server,i)=>({server,i})).sort((a,b)=>{
     const pinOrder=Number(Boolean(b.server.pinned))-Number(Boolean(a.server.pinned));
-    if(pinOrder)return pinOrder;
+    if(pinOrder&&key!=='downloadMbps')return pinOrder;
     if(!SORT_COLUMNS.includes(key))return a.i-b.i;
     const av=a.server[key],bv=b.server[key];
-    if(key==='latency'){
+    if(key==='latency'||key==='downloadMbps'){
       const am=typeof av!=='number'||!Number.isFinite(av),bm=typeof bv!=='number'||!Number.isFinite(bv);
       if(am!==bm)return am?1:-1; // unknown latency last in BOTH directions
       if(am&&bm)return a.i-b.i;

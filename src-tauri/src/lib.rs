@@ -11,6 +11,7 @@ struct RoutingGuard(tokio::sync::Mutex<()>);
 mod preferences;
 mod tray;
 mod engine;
+mod server_test;
 mod switching;
 mod phone_transfer;
 use engine::{EngineManager,ConnectionStatus,LatencyResult};
@@ -89,10 +90,31 @@ async fn ping_active_connection(app:AppHandle,manager:State<'_,EngineManager>,se
 #[tauri::command]
 async fn measure_server_latency(
     app:AppHandle, webview:tauri::Webview, manager:State<'_,EngineManager>,
-    outbound:Value, samples:u8, on_first:Option<tauri::ipc::JavaScriptChannelId>,
+    outbound:Value, samples:u8, on_first:Option<tauri::ipc::JavaScriptChannelId>, test_id:Option<u32>,
 )->Result<LatencyResult,String>{
     let progress=on_first.map(|channel|channel.channel_on(webview));
-    manager.measure_candidate(&app,outbound,samples,progress).await
+    match test_id {
+        Some(id) => manager.measure_manual_latency(&app,id,outbound,samples,progress).await,
+        None => manager.measure_candidate(&app,outbound,samples,progress).await,
+    }
+}
+#[tauri::command]
+async fn begin_manual_test(manager: State<'_, EngineManager>, speed: bool) -> Result<u32, String> {
+    manager.begin_manual_test(speed).await
+}
+#[tauri::command]
+async fn cancel_manual_test(manager: State<'_, EngineManager>, test_id: u32) {
+    manager.cancel_manual_test(test_id).await;
+}
+#[tauri::command]
+async fn finish_manual_test(manager: State<'_, EngineManager>, test_id: u32) {
+    manager.finish_manual_test(test_id).await;
+}
+#[tauri::command]
+async fn measure_server_download(
+    app: AppHandle, manager: State<'_, EngineManager>, test_id: u32, outbound: Value,
+) -> Result<server_test::DownloadResult, String> {
+    manager.measure_manual_download(&app, test_id, outbound).await
 }
 #[tauri::command]
 async fn configure_server_switching(manager:State<'_,EngineManager>,mode:switching::SwitchMode,candidates:Vec<switching::Profile>)->Result<(),String>{
@@ -237,6 +259,7 @@ pub fn run(){
             phone_transfer_addresses,start_phone_transfer,poll_phone_transfer,cancel_phone_transfer,
             connect_server,disconnect_server,connection_status,restore_system_proxy,
             ping_active_connection,measure_server_latency,
+            begin_manual_test,cancel_manual_test,finish_manual_test,measure_server_download,
             configure_server_switching,accept_server_suggestion,undo_server_switch,
             dismiss_tray_suggestion,accept_tray_suggestion,tray_panel_action,publish_tray_panel,retry_tray_connection,
             get_desktop_settings,set_desktop_settings,get_autostart_enabled,set_autostart_enabled,show_main_window,

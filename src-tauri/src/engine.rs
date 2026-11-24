@@ -10,6 +10,7 @@ use tempfile::TempDir;
 use tokio::{net::TcpStream,process::{Child,Command},sync::{Mutex,Semaphore},task::JoinSet,time::{sleep,timeout}};
 use crate::{diagnostics::Diagnostics, routing::{self,Mode,Routing}, tray::{self,ConnectionColor}};
 use crate::system_proxy::{self,ProxyBackup};
+use crate::server_test::{self, DownloadResult, ManualTest};
 use crate::switching::{self, HealthStatus, Monitor, Profile, SwitchDecision, SwitchMode, SwitchReason};
 
 const PROBE_URL:&str="https://www.gstatic.com/generate_204";
@@ -20,6 +21,9 @@ struct Probe { elapsed_ms:u64, ip:Option<std::net::IpAddr> }
 const MAX_PROFILE_BYTES:usize=32768;
 const STARTUP_TIMEOUT:Duration=Duration::from_secs(7);
 const PROBE_TIMEOUT:Duration=Duration::from_secs(9);
+const PRIMARY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const MANUAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const MANUAL_PRIMARY_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -104,11 +108,12 @@ pub struct EngineManager {
     active_probe: Mutex<()>,
     candidate_probes: Semaphore,
     network_events: Mutex<()>,
+    manual_test: Mutex<ManualTest>,
 }
 
 impl Default for EngineManager {
     fn default() -> Self {
-        Self { runtime: Mutex::default(), active_probe: Mutex::default(), candidate_probes: Semaphore::new(4), network_events: Mutex::new(()) }
+        Self { runtime: Mutex::default(), active_probe: Mutex::default(), candidate_probes: Semaphore::new(4), network_events: Mutex::new(()), manual_test: Mutex::default() }
     }
 }
 
@@ -255,7 +260,11 @@ fn tun_is_ready()->bool {
 fn trace_address(text:&str)->Option<std::net::IpAddr> {
     text.lines().find_map(|line|line.strip_prefix("ip=").and_then(|ip|ip.trim().parse().ok()))
 }
-async fn probe_round(port:u16)->Result<Probe,String>{
+async fn probe_round(port: u16) -> Result<Probe, String> {
+    probe_round_with_timeout(port, PRIMARY_PROBE_TIMEOUT).await
+}
+
+async fn probe_round_with_timeout(port:u16, primary_timeout:Duration)->Result<Probe,String>{
     let proxy=reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
         .map_err(|_|"Cannot configure local HTTP proxy probe")?;
     let client=reqwest::Client::builder().proxy(proxy).timeout(PROBE_TIMEOUT)
@@ -272,7 +281,7 @@ async fn probe_round(port:u16)->Result<Probe,String>{
         }
         trace_address(std::str::from_utf8(&text).ok()?)
     };
-    if let Some(ip)=timeout(Duration::from_secs(5),primary).await.ok().flatten() {
+    if let Some(ip)=timeout(primary_timeout,primary).await.ok().flatten() {
         return Ok(Probe{elapsed_ms:start.elapsed().as_millis().max(1) as u64,ip:Some(ip)});
     }
     let start=Instant::now();
@@ -283,8 +292,15 @@ async fn probe_round(port:u16)->Result<Probe,String>{
     }
     Ok(Probe{elapsed_ms:start.elapsed().as_millis().max(1) as u64,ip:None})
 }
-async fn probe_once(port:u16)->Result<u64,String>{
-    probe_round(port).await.map(|result|result.elapsed_ms)
+async fn probe_once(port: u16, manual: bool) -> Result<u64, String> {
+    let probe = if manual {
+        timeout(MANUAL_PROBE_TIMEOUT, probe_round_with_timeout(port, MANUAL_PRIMARY_TIMEOUT))
+            .await
+            .map_err(|_| "Proxy request timed out")??
+    } else {
+        probe_round(port).await?
+    };
+    Ok(probe.elapsed_ms)
 }
 async fn kill(mut core:StartedXray){
     let _=core.child.kill().await;
@@ -720,6 +736,7 @@ impl EngineManager {
     }
 
     async fn next_switch_round(&self)->Option<SwitchRound>{
+        if self.manual_test.lock().await.speed_running() { return None; }
         let mut runtime=self.runtime.lock().await;
         let now=Instant::now();
         let generation=runtime.generation;
@@ -752,12 +769,17 @@ impl EngineManager {
         }
         let automatic={
             let now=Instant::now();
+            let speed_testing = self.manual_test.lock().await.speed_running();
             let mut runtime=self.runtime.lock().await;
             if runtime.generation!=round.generation || runtime.monitor.revision!=round.revision {return;}
             let proxy_disabled=runtime.active.as_ref().is_some_and(|active|!active.route_available());
             let monitor=&mut runtime.monitor;
             monitor.checking=false;
             if proxy_disabled {monitor.suggestion=None;return;}
+            if speed_testing {
+                monitor.next_round = Some(now);
+                return;
+            }
             let active_ms=monitor.live.estimate();
             let failed=monitor.failures>=2;
             for (id,latency) in &samples {
@@ -785,8 +807,10 @@ impl EngineManager {
             }
         };
         if let Some((profile,decision))=automatic {
-            let _=self.change_connection(app,profile,ConnectionChange::Automatic(decision),
-                Some((round.generation,round.revision))).await;
+            if !self.manual_test.lock().await.speed_running() {
+                let _=self.change_connection(app,profile,ConnectionChange::Automatic(decision),
+                    Some((round.generation,round.revision))).await;
+            }
         }
     }
 
@@ -794,7 +818,61 @@ impl EngineManager {
         &self,app:&AppHandle,outbound:Value,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,
     )->Result<LatencyResult,String>{
         let _permit=self.candidate_probes.acquire().await.map_err(|_|"Latency tester unavailable")?;
-        ping_server(app,outbound,samples,progress).await
+        let core = start_xray(app, outbound, false, None).await?;
+        let result = sample_latency(core.proxy_port, samples, progress, false).await;
+        kill(core).await;
+        result
+    }
+
+    pub async fn begin_manual_test(&self, speed: bool) -> Result<u32, String> {
+        self.manual_test.lock().await.begin(speed)
+    }
+
+    pub async fn cancel_manual_test(&self, id: u32) {
+        self.manual_test.lock().await.cancel(id);
+    }
+
+    pub async fn finish_manual_test(&self, id: u32) {
+        self.manual_test.lock().await.finish(id);
+    }
+
+    pub async fn measure_manual_latency(
+        &self, app: &AppHandle, id: u32, outbound: Value, samples: u8,
+        progress: Option<tauri::ipc::Channel<LatencyResult>>,
+    ) -> Result<LatencyResult, String> {
+        self.with_manual_proxy(app, id, outbound, |port| sample_latency(port, samples, progress, true)).await
+    }
+
+    pub async fn measure_manual_download(
+        &self, app: &AppHandle, id: u32, outbound: Value,
+    ) -> Result<DownloadResult, String> {
+        self.with_manual_proxy(app, id, outbound, server_test::measure_download).await
+    }
+
+    async fn with_manual_proxy<T, F, Fut>(
+        &self, app: &AppHandle, id: u32, outbound: Value, measure: F,
+    ) -> Result<T, String>
+    where
+        F: FnOnce(u16) -> Fut,
+        Fut: std::future::Future<Output = Result<T, String>>,
+    {
+        let mut cancel = self.manual_test.lock().await.subscribe(id)?;
+        let (_permit, core) = tokio::select! {
+            biased;
+            _ = server_test::wait_until_cancelled(&mut cancel) => return Err(server_test::CANCELLED.into()),
+            started = async {
+                let permit = self.candidate_probes.acquire().await.map_err(|_| "Tester unavailable")?;
+                let core = start_xray(app, outbound, false, None).await?;
+                Ok::<_, String>((permit, core))
+            } => started?,
+        };
+        let result = tokio::select! {
+            biased;
+            _ = server_test::wait_until_cancelled(&mut cancel) => Err(server_test::CANCELLED.into()),
+            result = measure(core.proxy_port) => result,
+        };
+        kill(core).await;
+        result
     }
 
     pub async fn shutdown(&self,app:&AppHandle){let _=self.disconnect(app).await;}
@@ -841,27 +919,27 @@ fn latency_result(values:Vec<u64>, attempted:u8, reason:Option<String>)->Latency
     }
 }
 
-async fn ping_server(
-    app:&AppHandle,outbound:Value,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,
+async fn sample_latency(
+    port:u16,samples:u8,progress:Option<tauri::ipc::Channel<LatencyResult>>,manual:bool,
 )->Result<LatencyResult,String>{
     if !(1..=3).contains(&samples){return Err("Ping measurements must be 1, 2 or 3".into())}
-    let core=start_xray(app,outbound,false,None).await?;
     let mut values=Vec::with_capacity(samples.into());
     let mut reason=None;
     for attempt in 1..=samples{
-        match probe_once(core.proxy_port).await{
-            Ok(ms)=>values.push(ms),
+        match probe_once(port,manual).await{
+            Ok(ms)=>{
+                values.push(ms);
+                if values.len()==1 && attempt<samples {
+                    if let Some(channel)=&progress {
+                        let _=channel.send(latency_result(values.clone(),attempt,None));
+                    }
+                }
+            }
             Err(e)=>{
                 if reason.is_none()||!e.contains("timed out") { reason=Some(e); }
             }
         }
-        if attempt==1 && samples>1 {
-            if let Some(channel)=&progress {
-                let _=channel.send(latency_result(values.clone(),1,reason.clone()));
-            }
-        }
     }
-    kill(core).await;
     Ok(latency_result(values,samples,reason))
 }
 

@@ -1,5 +1,7 @@
 /** Shared connection/ping view logic. Pure functions make UI behavior testable. */
 export const DEFAULT_PING_SAMPLES=2;
+export const MAX_SPEED_SERVERS = 10;
+export const SPEED_SAMPLE_MB = 3;
 
 export function formatBytes(value){
   if(!Number.isFinite(value)||value<0)return '—';
@@ -22,6 +24,23 @@ export function normalizedLatencyResult(result,samples){
   }
   return {latency:Math.round(average),latencyStatus:successful<attempted?'partial':'ok',latencySuccess:successful,latencyAttempted:attempted};
 }
+export function latencyResponseCount(result) {
+  const {latencyAttempted: attempted, latencySuccess: successful, provisional} = result;
+  if (provisional || ![2, 3].includes(attempted) ||
+      !Number.isInteger(successful) || successful < 0 || successful > attempted) return '';
+  return `${successful}/${attempted}`;
+}
+
+export function speedCandidates(servers, pingResults) {
+  const reachable = servers.map(server => ({server, latency: pingResults.get(server.id)}))
+    .filter(({latency}) => Number.isFinite(latency))
+    .sort((a, b) => a.latency - b.latency);
+  return {
+    count: reachable.length,
+    candidates: reachable.slice(0, MAX_SPEED_SERVERS).map(({server}) => server),
+  };
+}
+
 export async function pingPool(servers,samples,runOne,onProgress,{concurrency=3,shouldStop=()=>false}={}){
   if(![1,2,3].includes(samples))throw new Error('Ping count must be 1, 2 or 3');
   const list=[...servers];let next=0,finished=0;
@@ -30,8 +49,11 @@ export async function pingPool(servers,samples,runOne,onProgress,{concurrency=3,
       const index=next++;if(index>=list.length)break;
       const server=list[index];let result;
       try{result=normalizedLatencyResult(await runOne(server,samples),samples)}
-      catch(_){result={latency:null,latencyStatus:'error',latencySuccess:0,latencyAttempted:samples}}
-      finished++;
+      catch(error){
+        const cancelled = shouldStop() || (error?.message ?? error) === 'Test cancelled';
+        result={latency:null,latencyStatus:cancelled?'cancelled':'start-failed',latencySuccess:0,latencyAttempted:0};
+      }
+      if (result.latencyStatus !== 'cancelled') finished++;
       onProgress?.(server,result,finished,list.length);
     }
   });

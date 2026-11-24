@@ -2,7 +2,8 @@ import {filterServers,sortServers,latencyClass,stabilityLevel,SORT_COLUMNS} from
 import {parseImport,parseShareLink} from './config.js';
 import {createRepository} from './store.js';
 import {outboundFromShareLink} from './xray-config.js';
-import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,normalizedLatencyResult,pingPool} from './runtime.js';
+import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,latencyResponseCount,
+  MAX_SPEED_SERVERS,normalizedLatencyResult,pingPool,SPEED_SAMPLE_MB,speedCandidates} from './runtime.js';
 import {displayServerName,renderFlag} from './flags.js';
 import {phoneTransferControls} from './phone-transfer.js';
 import {attachColorWheel} from './color-wheel.js';
@@ -19,7 +20,7 @@ const switching={
 let lastSwitchConfig;
 let configUpdate=Promise.resolve();
 const SUBSCRIPTION_CHECK_INTERVAL = 60_000;
-const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,editingSubscriptionId:null,subscriptionFilterId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false,pingBusy:false,pingAbort:false};
+const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,editingSubscriptionId:null,subscriptionFilterId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false};
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -30,7 +31,10 @@ let activePing;
 let editNameId;
 let colorWheel;
 let routingEditor;
-const firstPingResults=new Map();
+let serverTest;
+const pingFeedback = new Map();
+const downloadResults = new Map();
+const speedNumber = new Intl.NumberFormat(undefined, {maximumFractionDigits: 2});
 const trayPanel={visible:false,lastSnapshot:'',lastServer:null,mode:'systemProxy',error:''};
 
 
@@ -423,51 +427,162 @@ async function respondToSwitch(undo){
 
 function latencyView(server) {
   if(!server)return null;
-  const first=firstPingResults.get(server.id);
-  return first?.signature===server.signature&&first ? {...server,...first,provisional:true} : server;
+  const feedback = pingFeedback.get(server.id);
+  return feedback?.signature === server.signature ? {...server, ...feedback} : server;
 }
 
-async function measureLatency(server,samples,onFirst) {
+function currentServer(server) {
+  return state.servers.some(row => row.id === server.id && row.signature === server.signature);
+}
+
+function downloadView(server) {
+  const result = downloadResults.get(server.id);
+  return result?.signature === server.signature ? result : null;
+}
+
+async function measureLatency(server,samples,testId,onFirst) {
   const outbound=outboundFromShareLink(server.uri);
   const ipc=window.__TAURI_INTERNALS__;
-  if(samples===1||!ipc.transformCallback)return nativeInvoke('measure_server_latency',{outbound,samples});
+  const args = {outbound, samples, testId};
+  if(samples===1||!ipc.transformCallback)return nativeInvoke('measure_server_latency',args);
   const callback=ipc.transformCallback(({message})=>{
     if(message)onFirst(normalizedLatencyResult(message,1));
   });
   try {
-    return await nativeInvoke('measure_server_latency',{outbound,samples,onFirst:`__CHANNEL__:${callback}`});
+    return await nativeInvoke('measure_server_latency',{...args,onFirst:`__CHANNEL__:${callback}`});
   } finally {
     ipc.unregisterCallback(callback);
   }
 }
-async function pingServers(servers,samples){
-  if(!nativeHost()){toast('Real latency testing requires the native app and Xray-core');return}
-  if(state.pingBusy){toast('A latency test is already running');return}
+function pingServers(servers, samples) {
+  return testServers(servers, samples, 'ping');
+}
+
+async function cancelServerTest() {
+  const job = serverTest;
+  if (!job || job.cancelled) return;
+  job.cancelled = true;
+  job.button.disabled = true;
+  $('runtimeNotice').textContent = 'Cancelling server tests…';
+  if (job.id !== undefined) {
+    try { await nativeInvoke('cancel_manual_test', {testId: job.id}); }
+    catch (error) { toast(errorMessage(error)); }
+  }
+}
+
+async function testServers(servers,samples,kind){
+  if(!nativeHost()){toast('Server tests require the desktop app and Xray-core');return}
+  if(serverTest){toast('A server test is already running');return}
   if(!servers.length){toast('No configurations to test');return}
-  state.pingBusy=true;state.pingAbort=false;
-  const button=$('pingAllButton');
-  button.setAttribute('aria-busy','true');button.innerHTML=`${icon('close')} <span>Cancel ping</span>`;
-  try{
-    const summary=await pingPool(servers,samples,
-      server=>measureLatency(server,samples,first=>{
-        if(state.servers.some(s=>s.id===server.id&&s.signature===server.signature)){
-          firstPingResults.set(server.id,{...first,signature:server.signature});
-          render();
-        }
+  const speed = kind === 'speed';
+  const button = $(speed ? 'speedTestButton' : 'pingAllButton');
+  const other = $(speed ? 'pingAllButton' : 'speedTestButton');
+  const originalLabel = button.innerHTML;
+  const originalTitle = button.title;
+  const job = {kind, button, cancelled: false};
+  serverTest = job;
+  other.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.title = speed ? 'Cancel speed test' : 'Cancel ping';
+  button.innerHTML = `${icon('close')} <span>${button.title}</span>`;
+  const notice = $('runtimeNotice');
+  const maxData = Math.min(servers.length, MAX_SPEED_SERVERS) * SPEED_SAMPLE_MB;
+  const budget = speed ? ` · Up to ${maxData} MB of download data` : '';
+  notice.textContent = `Pinging 0/${servers.length}${budget}`;
+  try {
+    job.id = await nativeInvoke('begin_manual_test', {speed});
+    if (job.cancelled) {
+      notice.textContent = 'Server test cancelled';
+      return;
+    }
+    if (speed) downloadResults.clear();
+    else pingFeedback.clear();
+    render();
+    const pingResults = new Map();
+    const summary = await pingPool(servers,samples,
+      server => measureLatency(server, samples, job.id, first => {
+        if (serverTest !== job || job.cancelled || !currentServer(server)) return;
+        pingFeedback.set(server.id, {...first, signature: server.signature, provisional: true});
+        render();
       }),
       (server,result,done,total)=>{
-        firstPingResults.delete(server.id);
-        // A subscription refresh may have removed this entry while probing.
-        if(state.servers.some(s=>s.id===server.id&&s.signature===server.signature)){
-          safeAction(()=>repo.setLatency(server.id,result));
-          state.servers=repo.rows();
-          render();
+        if (serverTest !== job) return;
+        if (currentServer(server)) {
+          if (speed) {
+            if (Number.isFinite(result.latency)) pingResults.set(server.id, result.latency);
+          } else {
+            pingFeedback.delete(server.id);
+            if (result.latencyStatus === 'cancelled') {
+              pingFeedback.set(server.id, {...result, signature: server.signature});
+            } else {
+              safeAction(() => repo.setLatency(server.id, result));
+              state.servers = repo.rows();
+            }
+            render();
+          }
         }
-        $('runtimeNotice').textContent=`Latency tested: ${done}/${total} · ${samples} probe${samples===1?'':'s'} per server`;
-      },{concurrency:3,shouldStop:()=>state.pingAbort});
-    toast(`Real-delay tests ${summary.cancelled?'cancelled':'completed'}: ${summary.finished}/${summary.total}`);
-  }catch(err){toast(errorMessage(err))}
-  finally{firstPingResults.clear();state.pingBusy=false;state.pingAbort=false;button.removeAttribute('aria-busy');button.innerHTML=`${icon('activity')} <span>Ping <span class="muted-sub">All</span></span>`;}
+        if (!job.cancelled) notice.textContent = `Pinging ${done}/${total}${budget}`;
+      }, {concurrency: 3, shouldStop: () => job.cancelled});
+    if (speed && !job.cancelled) {
+      await runSpeedDownloads(job, servers.filter(currentServer), pingResults);
+    } else {
+      notice.textContent = `Ping ${summary.cancelled?'cancelled':'complete'} · ${summary.finished}/${summary.total} tested`;
+    }
+  } catch (error) {
+    notice.textContent = job.cancelled ? 'Server test cancelled' : errorMessage(error);
+  } finally {
+    try {
+      if (job.id !== undefined) await nativeInvoke('finish_manual_test', {testId: job.id});
+    } catch (error) {
+      toast(errorMessage(error));
+    }
+    if (!speed) {
+      for (const [id, feedback] of pingFeedback) {
+        if (feedback.provisional) pingFeedback.delete(id);
+      }
+      render();
+    }
+    serverTest = undefined;
+    button.removeAttribute('aria-busy');
+    button.disabled = false;
+    button.innerHTML = originalLabel;
+    button.title = originalTitle;
+    other.disabled = false;
+  }
+}
+
+async function runSpeedDownloads(job, servers, pingResults) {
+  const {count, candidates} = speedCandidates(servers, pingResults);
+  const notice = $('runtimeNotice');
+  if (!candidates.length) {
+    notice.textContent = 'No servers answered the ping';
+    return;
+  }
+  const total = candidates.length;
+  let measured = 0;
+  for (const [index, server] of candidates.entries()) {
+    if (job.cancelled) break;
+    if (!currentServer(server)) continue;
+    notice.textContent = `${count} answered · Download ${index + 1}/${total} · Up to ${total * SPEED_SAMPLE_MB} MB`;
+    downloadResults.set(server.id, {signature: server.signature, label: 'Testing…'});
+    render();
+    try {
+      const outbound = outboundFromShareLink(server.uri);
+      const result = await nativeInvoke('measure_server_download', {outbound, testId: job.id});
+      if (!currentServer(server)) continue;
+      downloadResults.set(server.id, {...result, signature: server.signature});
+      measured++;
+    } catch (error) {
+      if (!currentServer(server)) continue;
+      const reason = errorMessage(error);
+      const label = job.cancelled ? 'Cancelled' :
+        reason === 'Insufficient download sample' ? 'Insufficient data' : 'Download failed';
+      downloadResults.set(server.id, {signature: server.signature, label, reason});
+    } finally {
+      render();
+    }
+  }
+  notice.textContent = `Speed test ${job.cancelled?'cancelled':'complete'} · ${measured}/${total} measured`;
 }
 
 function renderSort(){for(const btn of document.querySelectorAll('[data-sort]')){const active=btn.dataset.sort===state.sortKey;btn.dataset.active=String(active);btn.querySelector('.sort-indicator').innerHTML=icon(active?(state.sortDirection==='asc'?'up':'down'):'sort');btn.setAttribute('aria-sort',active?(state.sortDirection==='asc'?'ascending':'descending'):'none')}}
@@ -475,7 +590,11 @@ function orderedRows(){
   const servers = state.subscriptionFilterId
     ? state.servers.filter(server => server.subscriptionId === state.subscriptionFilterId)
     : state.servers;
-  return sortServers(filterServers(servers, state.query).map(latencyView), state.sortKey, state.sortDirection);
+  const rows = filterServers(servers, state.query).map(server => {
+    const download = downloadView(server);
+    return {...latencyView(server), download, downloadMbps: download?.mbps};
+  });
+  return sortServers(rows, state.sortKey, state.sortDirection);
 }
 function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
     const starCell=tr.insertCell();
@@ -497,7 +616,34 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
     wrap.addEventListener('dblclick',e=>{if(e.target.closest('button,input'))e.stopPropagation()});
     wrap.append(flag,name,rename);nameCell.append(wrap);
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
-    const latencyCell=tr.insertCell();const latency=document.createElement('span');latency.className='latency-text '+latencyClass(s.latency);latency.textContent=typeof s.latency==='number'?`${s.latency}`:s.latencyStatus==='timeout'?'Timeout':s.latencyStatus==='error'?'Failed':'—';latency.dataset.provisional=String(Boolean(s.provisional));latency.title=s.provisional?'First probe · waiting for the average':s.latencyAttempted?`${s.latencySuccess||0}/${s.latencyAttempted} successful real-delay probes`: 'Not measured';latencyCell.append(latency);
+    const latencyCell = tr.insertCell();
+    const latency = document.createElement('span');
+    const latencyLabels = {timeout: 'Timeout', error: 'Failed', 'start-failed': 'Failed to start', cancelled: 'Cancelled'};
+    latency.className = 'latency-text ' + latencyClass(s.latency);
+    latency.textContent = Number.isFinite(s.latency) ? String(s.latency) : latencyLabels[s.latencyStatus] ?? '—';
+    latency.dataset.provisional = String(Boolean(s.provisional));
+    if (s.provisional) latency.title = 'First reply · waiting for the average';
+    latencyCell.append(latency);
+    const count = latencyResponseCount(s);
+    if (count) {
+      const responses = document.createElement('span');
+      responses.className = 'latency-responses';
+      responses.textContent = count;
+      responses.title = `${s.latencySuccess} replies out of ${s.latencyAttempted} probes`;
+      latencyCell.append(responses);
+    }
+    const downloadCell = tr.insertCell();
+    downloadCell.className = 'download-cell';
+    const download = s.download;
+    if (Number.isFinite(s.downloadMbps)) {
+      const speed = document.createElement('strong');
+      speed.textContent = `${speedNumber.format(s.downloadMbps)} Mbps`;
+      speed.title = `${download.complete ? 'Full' : 'Partial'} sample · ${speedNumber.format(download.downloadedBytes / 1e6)} MB received`;
+      downloadCell.append(speed);
+    } else {
+      downloadCell.textContent = download?.label ?? '—';
+      downloadCell.title = download?.reason ?? '';
+    }
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
     tr.addEventListener('click',()=>setSelected(s.id));tr.addEventListener('dblclick',()=>{setSelected(s.id);void connectSelected(s.id)});
     tr.addEventListener('contextmenu',e=>{e.preventDefault();setSelected(s.id);showContextMenu(s.id,e.clientX,e.clientY)});
@@ -740,7 +886,7 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   else{initWindowChrome();void refreshConnectionStatus({silent:true}).then(()=>configUpdate.catch(()=>{})).then(()=>readDesktopSettings());setInterval(()=>void refreshConnectionStatus({silent:true}),1500)}
   renderDesktopSettings();
   window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change',()=>{if(state.appearance==='system')applyTheme()});
-  document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'?'desc':'asc'}render()}));
+  document.querySelectorAll('[data-sort]').forEach(btn=>btn.addEventListener('click',()=>{const key=btn.dataset.sort;if(!SORT_COLUMNS.includes(key))return;if(key===state.sortKey)state.sortDirection=state.sortDirection==='asc'?'desc':'asc';else{state.sortKey=key;state.sortDirection=key==='favorite'||key==='downloadMbps'?'desc':'asc'}render()}));
   $('searchInput').addEventListener('input',e=>{state.query=e.target.value;render()});
   $('clearSubscriptionFilter').addEventListener('click', () => {
     state.subscriptionFilterId = null;
@@ -803,8 +949,12 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   }, SUBSCRIPTION_CHECK_INTERVAL);
   $('updateButton').addEventListener('click',()=>void updateAll());
   $('pingAllButton').addEventListener('click',()=>{
-    if(state.pingBusy){state.pingAbort=true;toast('Cancelling queued tests; active probes will finish')}
+    if(serverTest?.kind==='ping')void cancelServerTest();
     else void pingServers(state.servers,state.pingSamples);
+  });
+  $('speedTestButton').addEventListener('click', () => {
+    if (serverTest?.kind === 'speed') void cancelServerTest();
+    else void testServers(state.servers, 1, 'speed');
   });
   routingEditor=createRoutingEditor({invoke:nativeInvoke,showDialog,nativeHost,onSaved:async changed=>{
     if(changed&&state.connection.state==='connected'){

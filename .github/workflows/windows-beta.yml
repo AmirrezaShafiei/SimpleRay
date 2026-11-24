@@ -2,7 +2,7 @@ name: SimpleRay Windows beta (candidate)
 
 on:
   push:
-    branches: [main, build/simpleray-beta11]
+    branches: [main, build/simpleray-beta12]
     paths:
       - 'frontend/**'
       - 'src-tauri/**'
@@ -174,8 +174,8 @@ jobs:
             $runKey.Dispose()
             $prefKey.Dispose()
           }
-      - name: Publish the tested beta 11 installer
-        if: github.ref == 'refs/heads/build/simpleray-beta11'
+      - name: Publish the tested beta 12 installer
+        if: github.ref == 'refs/heads/build/simpleray-beta12'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -187,7 +187,7 @@ jobs:
           $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksumFile = Join-Path $installer.DirectoryName 'SHA256SUMS.txt'
           "$checksum  $($installer.Name)" | Set-Content -Path $checksumFile -Encoding ascii
-          gh release create $version $installer.FullName $checksumFile --prerelease --target $env:GITHUB_SHA --title "SimpleRay $version (Windows x64)" --notes "From Phone opens the Add subscription form with the received link filled in. Subscriptions support editing the URL, filtering the server list, and optional auto-updates every 6 or 24 hours. Suggest and Automatic compare up to six alternatives. Includes the tested Windows x64 NSIS installer and its SHA-256 checksum."
+          gh release create $version $installer.FullName $checksumFile --prerelease --latest=false --target $env:GITHUB_SHA --title "SimpleRay $version (Windows x64)" --notes "Adds download speed tests for up to 10 servers, reply counts for multi-probe pings, shorter manual probe timeouts, native cancellation, and improved contrast in light themes. Includes the tested Windows x64 NSIS installer and its SHA-256 checksum."
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the installer' }
           Write-Host "$checksum  $($installer.Name)"
       - name: Publish beta pre-release after successful build and tests

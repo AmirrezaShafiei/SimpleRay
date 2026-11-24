@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {bytesPerSecond,formatBytes,normalizedLatencyResult,pingPool} from '../frontend/runtime.js';
+import {bytesPerSecond,formatBytes,latencyResponseCount,normalizedLatencyResult,pingPool,speedCandidates} from '../frontend/runtime.js';
 test('measured traffic display units, zero and unavailable',()=>{
   assert.equal(bytesPerSecond(0),'0 B/s');
   assert.equal(bytesPerSecond(2048),'2.00 KB/s');
@@ -47,4 +47,33 @@ test('Ping All supports two probes and reports the returned average',async()=>{
     (_server,value)=>{result=value});
   assert.equal(summary.finished,1);
   assert.deepEqual(result,{latency:240,latencyStatus:'ok',latencySuccess:2,latencyAttempted:2});
+});
+
+test('table response counts appear only for completed multi-probe results', () => {
+  assert.equal(latencyResponseCount({latencySuccess: 2, latencyAttempted: 3}), '2/3');
+  assert.equal(latencyResponseCount({latencySuccess: 0, latencyAttempted: 2}), '0/2');
+  for (const result of [{}, {latencySuccess: 1, latencyAttempted: 1},
+    {latencySuccess: 1, latencyAttempted: 2, provisional: true}]) {
+    assert.equal(latencyResponseCount(result), '');
+  }
+});
+
+test('failed startups and cancelled requests do not create failed probe counts', async () => {
+  const results = [];
+  const servers = [{id: 'failed'}, {id: 'cancelled'}];
+  const summary = await pingPool(servers, 3, async server => {
+    throw new Error(server.id === 'cancelled' ? 'Test cancelled' : 'Xray could not start');
+  }, (_server, result) => results.push(result), {concurrency: 1});
+  assert.equal(summary.finished, 1);
+  assert.deepEqual(results.map(result => result.latencyStatus), ['start-failed', 'cancelled']);
+  assert.ok(results.every(result => result.latencyAttempted === 0 && !latencyResponseCount(result)));
+});
+
+test('only the ten lowest fresh pings qualify for the download test', () => {
+  const servers = Array.from({length: 13}, (_, index) => ({id: String(index), latency: 1}));
+  const pings = new Map(servers.slice(1).reverse().map(server => [server.id, Number(server.id) * 10]));
+  pings.set('2', 10);
+  const result = speedCandidates(servers, pings);
+  assert.equal(result.count, 12);
+  assert.deepEqual(result.candidates.map(server => server.id), servers.slice(1, 11).map(server => server.id));
 });

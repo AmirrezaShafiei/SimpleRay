@@ -4,6 +4,11 @@ import {DEMO_SERVERS,filterServers,sortServers,latencyClass,stabilityLevel} from
 test('fixtures have expected fields and standalone source em dash',()=>{assert.equal(DEMO_SERVERS.length,7);assert.ok(DEMO_SERVERS.some(s=>s.source==='—'));assert.ok(DEMO_SERVERS.every(s=>s.id&&s.name&&s.type&&s.source))});
 test('sorting works ascending and descending for all five headers',()=>{for(const key of ['favorite','name','type','latency','source']){const a=sortServers(DEMO_SERVERS,key,'asc'),b=sortServers(DEMO_SERVERS,key,'desc');assert.equal(a.length,7);assert.equal(b.length,7);assert.notDeepEqual(a.map(s=>s.id),b.map(s=>s.id),key)}});
 test('latency numeric sort and missing always last',()=>{const rows=[{name:'slow',latency:300},{name:'unmeasured',latency:null},{name:'fast',latency:30},{name:'timeout',latency:NaN},{name:'middle',latency:110}];assert.deepEqual(sortServers(rows,'latency','asc').map(s=>s.name),['fast','middle','slow','unmeasured','timeout']);assert.deepEqual(sortServers(rows,'latency','desc').map(s=>s.name),['slow','middle','fast','unmeasured','timeout'])});
+test('download speed sorts numerically across the measured servers',()=>{
+  const rows = [{id:'slow',downloadMbps:2,pinned:true},{id:'missing',pinned:true},{id:'fast',downloadMbps:10}];
+  assert.deepEqual(sortServers(rows,'downloadMbps','desc').map(row=>row.id),['fast','slow','missing']);
+  assert.deepEqual(sortServers(rows,'downloadMbps','asc').map(row=>row.id),['slow','fast','missing']);
+});
 test('natural alphanumeric server name sorting',()=>{const r=[{name:'Server 10'},{name:'Server 2'}];assert.deepEqual(sortServers(r,'name').map(s=>s.name),['Server 2','Server 10'])});
 test('search checks name, protocol and source case-insensitively',()=>{assert.equal(filterServers(DEMO_SERVERS,'GERMany').length,1);assert.equal(filterServers(DEMO_SERVERS,'vmess').length,3);assert.equal(filterServers(DEMO_SERVERS,'backup').length,1);assert.equal(filterServers(DEMO_SERVERS,'does-not-exist').length,0)});
 test('latency colors include the exact 200, 400 and 800 ms boundaries',()=>{
