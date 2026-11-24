@@ -122,13 +122,17 @@ pub async fn measure_download(port: u16) -> Result<DownloadResult, String> {
         downloaded += length;
     }
 
+    let complete = downloaded == DOWNLOAD_BYTES;
     let mbps = first_at.zip(last_at)
-        .and_then(|(first, last)| download_rate(downloaded - first_chunk, last - first))
+        .and_then(|(first, last)| {
+            let end = if complete { last } else { deadline };
+            download_rate(downloaded - first_chunk, end - first)
+        })
         .ok_or("Insufficient download sample")?;
     Ok(DownloadResult {
         mbps,
         downloaded_bytes: downloaded,
-        complete: downloaded == DOWNLOAD_BYTES,
+        complete,
     })
 }
 

@@ -188,7 +188,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   --panel:#fff;
   --panel2:color-mix(in srgb,var(--palette-primary) 4%,#f7f9fb);
   --button:color-mix(in srgb,var(--palette-primary) 5%,#f4f7fa);
-  --selected:color-mix(in srgb,var(--palette-accent) 12%,#eef3f8);
+  --selected:color-mix(in srgb,var(--palette-accent) 7%,#eef3f8);
   --blue:color-mix(in srgb,var(--palette-accent) 26%,#102a49);
   --selectedBorder:color-mix(in srgb,var(--palette-primary) 32%,#14263a);
 }

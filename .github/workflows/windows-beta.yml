@@ -181,6 +181,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $current = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/build/simpleray-beta12" --jq .object.sha
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the current beta build commit' }
+          if ($current -ne $env:GITHUB_SHA) { Write-Host 'This build was superseded'; exit 0 }
           $version = 'v' + (Get-Content package.json -Raw | ConvertFrom-Json).version
           $installer = Get-ChildItem 'src-tauri/target/release/bundle/nsis/*.exe' -File | Select-Object -First 1
           if (!$installer) { throw 'No tested NSIS installer' }

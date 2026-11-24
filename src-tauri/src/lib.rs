@@ -103,12 +103,14 @@ async fn begin_manual_test(manager: State<'_, EngineManager>, speed: bool) -> Re
     manager.begin_manual_test(speed).await
 }
 #[tauri::command]
-async fn cancel_manual_test(manager: State<'_, EngineManager>, test_id: u32) {
+async fn cancel_manual_test(manager: State<'_, EngineManager>, test_id: u32) -> Result<(), String> {
     manager.cancel_manual_test(test_id).await;
+    Ok(())
 }
 #[tauri::command]
-async fn finish_manual_test(manager: State<'_, EngineManager>, test_id: u32) {
+async fn finish_manual_test(manager: State<'_, EngineManager>, test_id: u32) -> Result<(), String> {
     manager.finish_manual_test(test_id).await;
+    Ok(())
 }
 #[tauri::command]
 async fn measure_server_download(
