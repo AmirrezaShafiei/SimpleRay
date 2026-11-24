@@ -618,7 +618,7 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
     const typeCell=tr.insertCell();const type=document.createElement('span');type.className='type-label type-'+s.type.toLowerCase();type.textContent=s.type;typeCell.append(type);
     const latencyCell = tr.insertCell();
     const latency = document.createElement('span');
-    const latencyLabels = {timeout: 'Timeout', error: 'Failed', 'start-failed': 'Failed to start', cancelled: 'Cancelled'};
+    const latencyLabels = {timeout: 'Timeout', error: 'Failed', 'probe-failed': 'Failed', 'start-failed': 'Failed to start', cancelled: 'Cancelled'};
     latency.className = 'latency-text ' + latencyClass(s.latency);
     latency.textContent = Number.isFinite(s.latency) ? String(s.latency) : latencyLabels[s.latencyStatus] ?? '—';
     latency.dataset.provisional = String(Boolean(s.provisional));

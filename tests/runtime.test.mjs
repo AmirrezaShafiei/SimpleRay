@@ -29,7 +29,7 @@ test('Ping all caps parallelism at three and saves completion per node',async()=
 });
 test('failed proxy probes and missing averages never appear as a measured zero',()=>{
   assert.deepEqual(normalizedLatencyResult({averageMs:null,successful:0,attempted:1,reason:'Proxy request failed'},1),{
-    latency:null,latencyStatus:'error',latencySuccess:0,latencyAttempted:1
+    latency:null,latencyStatus:'probe-failed',latencySuccess:0,latencyAttempted:1
   });
   assert.equal(normalizedLatencyResult({averageMs:null,successful:1,attempted:1},1).latency,null);
 });
@@ -52,7 +52,9 @@ test('Ping All supports two probes and reports the returned average',async()=>{
 test('table response counts appear only for completed multi-probe results', () => {
   assert.equal(latencyResponseCount({latencySuccess: 2, latencyAttempted: 3}), '2/3');
   assert.equal(latencyResponseCount({latencySuccess: 0, latencyAttempted: 2}), '0/2');
+  assert.equal(latencyResponseCount({latencySuccess: 0, latencyAttempted: 3, latencyStatus: 'probe-failed'}), '0/3');
   for (const result of [{}, {latencySuccess: 1, latencyAttempted: 1},
+    {latencySuccess: 0, latencyAttempted: 3, latencyStatus: 'error'},
     {latencySuccess: 1, latencyAttempted: 2, provisional: true}]) {
     assert.equal(latencyResponseCount(result), '');
   }

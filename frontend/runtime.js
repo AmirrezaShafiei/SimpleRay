@@ -20,13 +20,14 @@ export function normalizedLatencyResult(result,samples){
   const average=result?.averageMs;
   if(!successful||!Number.isFinite(average)||average<0){
     const timedOut=!result?.reason||/timed out/i.test(result.reason);
-    return {latency:null,latencyStatus:timedOut?'timeout':'error',latencySuccess:0,latencyAttempted:attempted};
+    return {latency:null,latencyStatus:timedOut?'timeout':'probe-failed',latencySuccess:0,latencyAttempted:attempted};
   }
   return {latency:Math.round(average),latencyStatus:successful<attempted?'partial':'ok',latencySuccess:successful,latencyAttempted:attempted};
 }
 export function latencyResponseCount(result) {
-  const {latencyAttempted: attempted, latencySuccess: successful, provisional} = result;
-  if (provisional || ![2, 3].includes(attempted) ||
+  const {latencyAttempted: attempted, latencySuccess: successful, latencyStatus, provisional} = result;
+  // Before beta.12, an "error" record could count probes that never started.
+  if (provisional || latencyStatus === 'error' || ![2, 3].includes(attempted) ||
       !Number.isInteger(successful) || successful < 0 || successful > attempted) return '';
   return `${successful}/${attempted}`;
 }
