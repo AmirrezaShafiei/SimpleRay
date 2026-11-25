@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {setImmediate as tick} from 'node:timers/promises';
 import {bytesPerSecond,formatBytes,latencyResponseCount,normalizedLatencyResult,pingPool,pingWithFallback} from '../frontend/runtime.js';
 test('measured traffic display units, zero and unavailable',()=>{
   assert.equal(bytesPerSecond(0),'0 B/s');
@@ -17,14 +18,14 @@ test('three real delay sample average and partial success metadata',()=>{
     latency:null,latencyStatus:'timeout',latencySuccess:0,latencyAttempted:3
   });
 });
-test('Ping all caps parallelism at three and saves completion per node',async()=>{
+test('Ping All defaults to four parallel tests and saves completion per server',async()=>{
   const servers=Array.from({length:8},(_,i)=>({id:`s${i}`}));let concurrent=0,maxConcurrent=0;const seen=[];
   const summary=await pingPool(servers,3,async()=>{
     concurrent++;maxConcurrent=Math.max(concurrent,maxConcurrent);
     await new Promise(resolve=>setTimeout(resolve,8));concurrent--;
     return {averageMs:87,successful:3,attempted:3};
-  },(server,result,done,total)=>seen.push({id:server.id,result,done,total}),{concurrency:3});
-  assert.equal(summary.finished,8);assert.equal(seen.length,8);assert.equal(maxConcurrent,3);
+  },(server,result,done,total)=>seen.push({id:server.id,result,done,total}));
+  assert.equal(summary.finished,8);assert.equal(seen.length,8);assert.equal(maxConcurrent,4);
   assert.deepEqual(seen.at(-1).result,{latency:87,latencyStatus:'ok',latencySuccess:3,latencyAttempted:3});
 });
 test('failed proxy probes and missing averages never appear as a measured zero',()=>{
@@ -91,11 +92,64 @@ test('one fast reply anywhere in the list keeps all final probes short', async (
     return count === 2 ? probeResult(2, 201, 202) : probeResult(1, 205);
   }, (server, result) => results.set(server.id, result), fallbackOptions);
   assert.deepEqual(calls, [
-    ['slow', 2, false], ['fast', 2, false], ['slow', 1, false], ['fast', 1, false],
+    ['slow', 2, false], ['fast', 2, false], ['fast', 1, false], ['slow', 1, false],
   ]);
   assert.equal(results.get('fast').latency, 203);
   assert.equal(latencyResponseCount(results.get('fast')), '3/3');
   assert.equal(latencyResponseCount(results.get('slow')), '0/3');
+});
+
+test('a fast server finishes both probes while other initial probes are still running', async () => {
+  const servers = ['slow-a', 'slow-b', 'fast', 'slow-c', 'queued'];
+  const slowReply = Promise.withResolvers();
+  const calls = [];
+  const results = new Map();
+  let active = 0;
+  let maxActive = 0;
+  const task = pingWithFallback(servers, 2, async (server, count, extended) => {
+    calls.push({server, count, extended});
+    active++;
+    maxActive = Math.max(maxActive, active);
+    try {
+      if (server.startsWith('slow')) await slowReply.promise;
+      return probeResult(count, 100);
+    } finally {
+      active--;
+    }
+  }, (server, result) => results.set(server, result), {...fallbackOptions, concurrency: undefined});
+  await tick();
+  const earlyCalls = calls.slice();
+  const fastResult = results.get('fast');
+  slowReply.resolve();
+  const summary = await task;
+  assert.deepEqual(earlyCalls.slice(0, 5).map(call => call.server), ['slow-a', 'slow-b', 'fast', 'slow-c', 'fast']);
+  assert.equal(latencyResponseCount(fastResult), '2/2');
+  assert.ok(calls.every(call => !call.extended));
+  assert.equal(maxActive, 4);
+  assert.equal(summary.finished, servers.length);
+});
+
+test('first reply in three-ping mode unlocks ready finals before that server finishes its second probe', async () => {
+  const secondProbe = Promise.withResolvers();
+  const finalCalls = [];
+  let firstReply;
+  const task = pingWithFallback(['waiting', 'fast'], 3, (server, count, extended, onFirst) => {
+    if (count === 1) {
+      finalCalls.push([server, extended]);
+      return probeResult(1, 200);
+    }
+    if (server === 'waiting') return probeResult(2);
+    firstReply = onFirst;
+    return secondProbe.promise;
+  }, () => {}, {...fallbackOptions, concurrency: 2});
+  await tick();
+  firstReply(normalizedLatencyResult(probeResult(1, 100), 1));
+  await tick();
+  const earlyFinals = finalCalls.slice();
+  secondProbe.resolve(probeResult(2, 100, 150));
+  await task;
+  assert.deepEqual(earlyFinals, [['waiting', false]]);
+  assert.deepEqual(finalCalls, [['waiting', false], ['fast', false]]);
 });
 
 for (const samples of [2, 3]) {

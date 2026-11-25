@@ -1,5 +1,6 @@
 /** Shared connection/ping view logic. Pure functions make UI behavior testable. */
 export const DEFAULT_PING_SAMPLES=2;
+const MAX_PARALLEL_PINGS=4;
 
 export function formatBytes(value){
   if(!Number.isFinite(value)||value<0)return '—';
@@ -37,46 +38,88 @@ export function latencyResponseCount(result) {
 }
 
 export async function pingWithFallback(servers, samples, runOne, onResult, options) {
-  const {shouldStop, isCurrent, onStage, onPreliminary} = options;
+  if (![2, 3].includes(samples)) throw new Error('Ping count must be 2 or 3');
+  const {concurrency=MAX_PARALLEL_PINGS, shouldStop, isCurrent, onStage, onPreliminary} = options;
   const preliminary = new Map();
+  const fastReplies = new Set();
+  const running = new Set();
   const initialSamples = samples - 1;
+  let next = 0;
+  let initialDone = 0;
   let finished = 0;
+  let extendedAnnounced = false;
+  let latestReady;
+  let wake = () => {};
   const report = (server, result) => {
     if (result.latencyStatus !== 'cancelled') finished++;
     onResult(server, result, finished, servers.length);
   };
-  await pingPool(servers, initialSamples,
-    server => isCurrent(server) ? runOne(server, initialSamples, false) : undefined,
-    (server, result, done, total, raw) => {
-      if (isCurrent(server)) {
-        if (raw?.attempted > 0) {
-          preliminary.set(server, {result, raw});
-          onPreliminary(server, result);
-        } else {
-          report(server, result);
+
+  function recordFastReply(server, result) {
+    if (Number.isFinite(result.latency) && !fastReplies.has(server)) {
+      fastReplies.add(server);
+      wake();
+    }
+  }
+  async function runInitial(server) {
+    if (isCurrent(server)) {
+      const {result, raw} = await runPing(() => runOne(server, initialSamples, false, first => {
+        if (!isCurrent(server) || shouldStop()) return;
+        recordFastReply(server, first);
+        onPreliminary(server, first);
+      }), initialSamples, shouldStop);
+      if (isCurrent(server) && raw?.attempted > 0) {
+        preliminary.set(server, {result, raw});
+        latestReady = server;
+        recordFastReply(server, result);
+        onPreliminary(server, result);
+      } else if (isCurrent(server)) {
+        report(server, result);
+      }
+    }
+    onStage(++initialDone, servers.length, false, false);
+  }
+
+  async function runFinal(server, first, extended) {
+    const {result, raw} = await runPing(() => runOne(server, 1, extended), 1, shouldStop);
+    if (isCurrent(server)) report(server, combinedPing(first, result, raw));
+  }
+
+  const track = work => {
+    const task = work.finally(() => running.delete(task));
+    running.add(task);
+  };
+  while (!shouldStop()) {
+    while (!shouldStop() && running.size < concurrency) {
+      // Start final probes as soon as their timeout can be decided.
+      const canUseShortTimeout = [...fastReplies].some(isCurrent);
+      if (canUseShortTimeout || initialDone === servers.length) {
+        const ready = canUseShortTimeout && preliminary.has(latestReady) && isCurrent(latestReady)
+          ? latestReady : [...preliminary.keys()].find(isCurrent);
+        if (ready) {
+          const extended = !canUseShortTimeout;
+          if (extended && !extendedAnnounced) {
+            extendedAnnounced = true;
+            onStage(0, preliminary.size, true, true);
+          }
+          if (shouldStop()) break;
+          const first = preliminary.get(ready);
+          preliminary.delete(ready);
+          track(runFinal(ready, first, extended));
+          continue;
         }
       }
-      onStage(done, total, false, false);
-    }, options);
-
-  const remaining = [...preliminary.keys()].filter(isCurrent);
-  const extended = !remaining.some(server => Number.isFinite(preliminary.get(server).result.latency));
-  if (remaining.length && !shouldStop()) {
-    onStage(0, remaining.length, true, extended);
-    await pingPool(remaining, 1,
-      server => isCurrent(server) ? runOne(server, 1, extended) : undefined,
-      (server, result, done, total, raw) => {
-        if (isCurrent(server)) {
-          report(server, combinedPing(preliminary.get(server), result, raw));
-        }
-        preliminary.delete(server);
-        onStage(done, total, true, extended);
-      }, options);
+      if (next === servers.length) break;
+      track(runInitial(servers[next++]));
+    }
+    if (!running.size) break;
+    await Promise.race([...running, new Promise(resolve => {wake = resolve})]);
   }
+  await Promise.all(running);
   if (shouldStop()) {
     for (const server of preliminary.keys()) {
       if (isCurrent(server)) {
-        report(server, {latency: null, latencyStatus: 'cancelled', latencySuccess: 0, latencyAttempted: 0});
+        report(server, incompletePing(true));
       }
     }
   }
@@ -95,21 +138,28 @@ function combinedPing({result: first, raw}, last, lastRaw) {
   });
 }
 
-export async function pingPool(servers,samples,runOne,onProgress,{concurrency=3,shouldStop=()=>false}={}){
+function incompletePing(cancelled) {
+  return {latency:null,latencyStatus:cancelled?'cancelled':'start-failed',latencySuccess:0,latencyAttempted:0};
+}
+
+async function runPing(run, samples, shouldStop) {
+  try {
+    const raw = await run();
+    return {result: normalizedLatencyResult(raw, samples), raw};
+  } catch (error) {
+    const cancelled = shouldStop() || (error?.message ?? error) === 'Test cancelled';
+    return {result: incompletePing(cancelled)};
+  }
+}
+
+export async function pingPool(servers,samples,runOne,onProgress,{concurrency=MAX_PARALLEL_PINGS,shouldStop=()=>false}={}){
   if(![1,2,3].includes(samples))throw new Error('Ping count must be 1, 2 or 3');
   const list=[...servers];let next=0,finished=0;
   const workers=Array.from({length:Math.min(concurrency,list.length)},async()=>{
     while(!shouldStop()){
       const index=next++;if(index>=list.length)break;
-      const server=list[index];let result,raw;
-      try{
-        raw=await runOne(server,samples);
-        result=normalizedLatencyResult(raw,samples);
-      }
-      catch(error){
-        const cancelled = shouldStop() || (error?.message ?? error) === 'Test cancelled';
-        result={latency:null,latencyStatus:cancelled?'cancelled':'start-failed',latencySuccess:0,latencyAttempted:0};
-      }
+      const server=list[index];
+      const {result,raw}=await runPing(()=>runOne(server,samples),samples,shouldStop);
       if (result.latencyStatus !== 'cancelled') finished++;
       onProgress?.(server,result,finished,list.length,raw);
     }

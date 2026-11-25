@@ -228,8 +228,8 @@ function renderConnection(){
   speedButton.disabled=!nativeHost()||state.connectionBusy!==false||health?.switching===true||
     !Number.isInteger(c.connectionGeneration)||testing;
   speedButton.setAttribute('aria-busy',String(testing));
-  speedButton.title=downloadTest?.error??(downloadTest?.rate?'Test download again (up to 10 MB)':
-    'Measure download speed through the active tunnel (up to 10 MB)');
+  speedButton.title=downloadTest?.error??(downloadTest?.rate?'Test download again (up to 3 MB)':
+    'Measure download speed through the active tunnel (up to 3 MB)');
   const speedLabel=$('downloadTestLabel');
   const speedText=testing?'Testing…':downloadTest?.error?'Test failed':downloadTest?.rate??'Test download';
   if(speedLabel.textContent!==speedText)speedLabel.textContent=speedText;
@@ -513,10 +513,20 @@ async function pingServers(servers,samples){
       pingFeedback.set(server.id, {...first, signature: server.signature, provisional: true});
       render();
     };
-    const runOne = (server, count, extended = false) =>
-      measureLatency(server, count, job.id, extended, first => showFirst(server, first));
-    const onResult = (server, result) => {
-      if (pingJob !== job || !currentServer(server)) return;
+    const runOne = (server, count, extended = false, onFirst = first => showFirst(server, first)) =>
+      measureLatency(server, count, job.id, extended, onFirst);
+    let completed = 0;
+    let extendedFinals = false;
+    const updateProgress = () => {
+      if (job.cancelled) return;
+      const stage = extendedFinals ? 'Final ping · 10 s timeout' : 'Pinging';
+      notice.textContent = `${stage} · ${completed}/${servers.length}`;
+    };
+    const onResult = (server, result, done) => {
+      if (pingJob !== job) return;
+      completed = done;
+      updateProgress();
+      if (!currentServer(server)) return;
       pingFeedback.delete(server.id);
       if (result.latencyStatus === 'cancelled') {
         pingFeedback.set(server.id, {...result, signature: server.signature});
@@ -526,7 +536,7 @@ async function pingServers(servers,samples){
       }
       render();
     };
-    const options = {concurrency: 3, shouldStop: () => job.cancelled};
+    const options = {shouldStop: () => job.cancelled};
     let summary;
     if (samples > 1) {
       summary = await pingWithFallback(servers, samples, runOne, onResult, {
@@ -535,17 +545,15 @@ async function pingServers(servers,samples){
         onPreliminary(server, result) {
           if (!pingFeedback.has(server.id)) showFirst(server, result);
         },
-        onStage(done, total, final, extended) {
-          if (job.cancelled) return;
-          const stage = final ? (extended ? 'Final ping · 10 s timeout' : 'Final ping') : 'Pinging';
-          notice.textContent = `${stage} · ${done}/${total}`;
+        onStage(_done, _total, final, extended) {
+          if (final && extended) {
+            extendedFinals = true;
+            updateProgress();
+          }
         },
       });
     } else {
-      summary = await pingPool(servers,samples,runOne,(server, result, done, total) => {
-        onResult(server, result);
-        if (!job.cancelled) notice.textContent = `Pinging ${done}/${total}`;
-      }, options);
+      summary = await pingPool(servers,samples,runOne,onResult,options);
     }
     notice.textContent = `Ping ${summary.cancelled?'cancelled':'complete'} · ${summary.finished}/${summary.total} tested`;
   } catch (error) {
