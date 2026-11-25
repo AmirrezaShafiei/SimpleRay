@@ -1,7 +1,7 @@
 export const APPEARANCE_KEY='simpleray.phase1.preferences.v1';
 export const APPEARANCE_MODES=['system','light','dark'];
 export const THEME_PALETTES=['ocean','jade','violet','custom'];
-export const THEME_COLORS={primary:'#245995',accent:'#3eadef'};
+export const THEME_COLORS={primary:'#62d9c5',accent:'#0068da'};
 
 export function themeColor(input,fallback){
   return /^#[0-9a-f]{6}$/i.test(input??'')?input:fallback;

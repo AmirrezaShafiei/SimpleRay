@@ -1,63 +1,145 @@
-function hslToHex(h,s,l){
-  const a=s*Math.min(l,1-l);
-  const channel=n=>{
-    const k=(n+h/30)%12;
-    return Math.round(255*(l-a*Math.max(-1,Math.min(k-3,9-k,1)))).toString(16).padStart(2,'0');
-  };
-  return '#'+[0,8,4].map(channel).join('');
+function hexToHsv(hex) {
+  const [red, green, blue] = [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const value = Math.max(red, green, blue);
+  const delta = value - Math.min(red, green, blue);
+  if (!delta) return {hue: 0, saturation: 0, value};
+  const sector = value === red ? (green - blue) / delta
+    : value === green ? (blue - red) / delta + 2 : (red - green) / delta + 4;
+  return {hue: (sector * 60 + 360) % 360, saturation: delta / value, value};
 }
-function colorPosition(hex){
-  const [r,g,b]=[1,3,5].map(offset=>parseInt(hex.slice(offset,offset+2),16)/255);
-  const hi=Math.max(r,g,b),lo=Math.min(r,g,b),delta=hi-lo,l=(hi+lo)/2;
-  if(!delta)return {h:0,s:0,l};
-  const sector=hi===r?(g-b)/delta:hi===g?(b-r)/delta+2:(r-g)/delta+4;
-  return {h:(sector*60+360)%360,s:delta/(1-Math.abs(2*l-1)),l};
-}
-export function attachColorWheel({canvas,target,lightness,read,write,commit}){
-  const ctx=canvas.getContext('2d');
-  const size=canvas.width,center=size/2,radius=center-5;
-  let image,atLightness,dragging=false;
-  function refresh(){
-    const color=colorPosition(read(target.value));
-    lightness.value=String(Math.round(color.l*100));
-    const wheelLightness=Math.round(color.l*100)/100;
-    if(atLightness!==wheelLightness){
-      image=ctx.createImageData(size,size);
-      for(let y=0;y<size;y++)for(let x=0;x<size;x++){
-        const dx=x-center,dy=y-center,distance=Math.hypot(dx,dy);
-        if(distance>radius)continue;
-        const angle=(Math.atan2(dy,dx)*180/Math.PI+360)%360;
-        const hex=hslToHex(angle,distance/radius,wheelLightness);
-        const i=(y*size+x)*4;
-        for(let c=0;c<3;c++)image.data[i+c]=parseInt(hex.slice(1+c*2,3+c*2),16);
-        image.data[i+3]=255;
-      }
-      atLightness=wheelLightness;
-    }
-    ctx.putImageData(image,0,0);
-    const angle=color.h*Math.PI/180;
-    ctx.beginPath();
-    ctx.arc(center+Math.cos(angle)*radius*color.s,center+Math.sin(angle)*radius*color.s,5,0,Math.PI*2);
-    ctx.lineWidth=3;ctx.strokeStyle='#222';ctx.stroke();
-    ctx.lineWidth=1.5;ctx.strokeStyle='#fff';ctx.stroke();
-  }
-  function pick(event){
-    const box=canvas.getBoundingClientRect();
-    const x=(event.clientX-box.left)*size/box.width-center;
-    const y=(event.clientY-box.top)*size/box.height-center;
-    write(target.value,hslToHex((Math.atan2(y,x)*180/Math.PI+360)%360,Math.min(1,Math.hypot(x,y)/radius),Number(lightness.value)/100));
-  }
-  canvas.addEventListener('pointerdown',event=>{
-    if(event.button!==0)return;
-    dragging=true;canvas.setPointerCapture(event.pointerId);pick(event);
+
+function hsvToRgb({hue, saturation, value}) {
+  return [5, 3, 1].map(offset => {
+    const sector = (offset + hue / 60) % 6;
+    return Math.round(255 * value * (1 - saturation * Math.max(0, Math.min(sector, 4 - sector, 1))));
   });
-  canvas.addEventListener('pointermove',event=>{if(dragging)pick(event)});
-  canvas.addEventListener('lostpointercapture',()=>{dragging=false;commit()});
-  lightness.addEventListener('change',commit);
-  target.addEventListener('change',refresh);
-  lightness.addEventListener('input',()=>{
-    const {h,s}=colorPosition(read(target.value));
-    write(target.value,hslToHex(h,s,Number(lightness.value)/100));
+}
+
+function hsvToHex(color) {
+  return '#' + hsvToRgb(color).map(channel => channel.toString(16).padStart(2, '0')).join('');
+}
+
+export function attachColorWheel({canvas, target, brightness, hex, preview, read, write, commit}) {
+  const context = canvas.getContext('2d');
+  const size = canvas.width;
+  const center = size / 2;
+  const radius = center - 7;
+  const colors = new Map();
+  let spectrum;
+  let activePointer = null;
+
+  function colorAt(x, y, value) {
+    return {
+      hue: (Math.atan2(y, x) * 180 / Math.PI + 360) % 360,
+      saturation: Math.min(1, Math.hypot(x, y) / radius),
+      value,
+    };
+  }
+
+  function draw(color) {
+    if (!context) return;
+    if (!spectrum) {
+      spectrum = context.createImageData(size, size);
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const dx = x + 0.5 - center;
+          const dy = y + 0.5 - center;
+          const opacity = Math.max(0, Math.min(1, radius + 0.5 - Math.hypot(dx, dy)));
+          if (!opacity) continue;
+          const [red, green, blue] = hsvToRgb(colorAt(dx, dy, 1));
+          const i = (y * size + x) * 4;
+          spectrum.data[i] = red;
+          spectrum.data[i + 1] = green;
+          spectrum.data[i + 2] = blue;
+          spectrum.data[i + 3] = opacity * 255;
+        }
+      }
+    }
+    context.putImageData(spectrum, 0, 0);
+    context.save();
+    context.globalCompositeOperation = 'source-atop';
+    context.fillStyle = `rgba(0, 0, 0, ${1 - color.value})`;
+    context.fillRect(0, 0, size, size);
+    context.restore();
+
+    const angle = color.hue * Math.PI / 180;
+    const distance = radius * color.saturation;
+    context.beginPath();
+    context.arc(center + Math.cos(angle) * distance, center + Math.sin(angle) * distance, 5, 0, Math.PI * 2);
+    context.lineWidth = 3.5;
+    context.strokeStyle = '#24272c';
+    context.stroke();
+    context.lineWidth = 1.8;
+    context.strokeStyle = '#fff';
+    context.stroke();
+  }
+
+  function currentColor() {
+    const field = target.value;
+    const value = read(field).toLowerCase();
+    const cached = colors.get(field);
+    if (cached?.hex === value) return cached.color;
+    const color = hexToHsv(value);
+    colors.set(field, {hex: value, color});
+    return color;
+  }
+
+  function refresh() {
+    const color = currentColor();
+    const value = read(target.value);
+    if (document.activeElement !== hex) hex.value = value.toUpperCase();
+    preview.style.setProperty('--wheel-color', value);
+    brightness.value = String(Math.round(color.value * 100));
+    brightness.style.setProperty('--wheel-high-color', hsvToHex({...color, value: 1}));
+    draw(color);
+  }
+
+  function setColor(color) {
+    const value = hsvToHex(color);
+    colors.set(target.value, {hex: value, color});
+    write(target.value, value);
+  }
+
+  function pick(event) {
+    const box = canvas.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+    const x = (event.clientX - box.left) * size / box.width - center;
+    const y = (event.clientY - box.top) * size / box.height - center;
+    setColor(colorAt(x, y, currentColor().value));
+  }
+
+  canvas.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || activePointer !== null) return;
+    activePointer = event.pointerId;
+    canvas.setPointerCapture(activePointer);
+    pick(event);
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (event.pointerId === activePointer) pick(event);
+  });
+  canvas.addEventListener('lostpointercapture', event => {
+    if (event.pointerId !== activePointer) return;
+    activePointer = null;
+    commit();
+  });
+  target.addEventListener('change', refresh);
+  brightness.addEventListener('input', () => {
+    setColor({...currentColor(), value: Number(brightness.value) / 100});
+  });
+  brightness.addEventListener('change', commit);
+  hex.addEventListener('change', () => {
+    const value = hex.value.trim().replace(/^#/, '').toLowerCase();
+    if (/^[0-9a-f]{6}$/.test(value)) {
+      write(target.value, `#${value}`);
+      commit();
+    }
+    hex.value = read(target.value).toUpperCase();
+  });
+  hex.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      hex.blur();
+    }
   });
   return {refresh};
 }

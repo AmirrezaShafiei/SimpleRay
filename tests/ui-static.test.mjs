@@ -32,7 +32,7 @@ test('the compact desktop window uses one themed titlebar with working controls'
   assert.equal(window.decorations,false);
   assert.ok(window.width<1100&&window.height<700);
   assert.match(html,/<header class="app-titlebar" data-tauri-drag-region>/);
-  assert.match(css,/\.app-titlebar\{[^}]*background:var\(--panel\)/);
+  assert.match(css,/\.app-titlebar\{[^}]*background:var\(--chrome\)/);
   for(const id of ['windowMinimize','windowMaximize','windowClose']){
     assert.ok(html.includes(`id="${id}"`));
     assert.ok(js.includes(`'${id}'`));

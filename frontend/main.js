@@ -7,7 +7,7 @@ import {displayServerName,renderFlag} from './flags.js';
 import {phoneTransferControls} from './phone-transfer.js';
 import {attachColorWheel} from './color-wheel.js';
 import {createRoutingEditor, renderIpHistory} from './routing.js';
-import {APPEARANCE_KEY,THEME_COLORS,paintAppearance,restoreAppearance,savedPreferences,themeColor} from './theme.js';
+import {APPEARANCE_KEY,paintAppearance,restoreAppearance,savedPreferences} from './theme.js';
 const $=id=>document.getElementById(id);
 const pref=savedPreferences(localStorage);
 const repo=createRepository(localStorage);
@@ -118,8 +118,6 @@ function applyTheme(){
     input.checked=input.value===state[input.name];
   }
   $('themeColors').hidden=state.palette!=='custom';
-  $('primaryColor').value=state.themePrimary;
-  $('accentColor').value=state.themeAccent;
   if(state.palette==='custom')colorWheel?.refresh();
   syncTrayPanel();
 }
@@ -1108,19 +1106,10 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
     });
   }
   colorWheel=attachColorWheel({
-    canvas:$('themeWheel'),target:$('wheelTarget'),lightness:$('wheelLightness'),
+    canvas:$('themeWheel'),target:$('wheelTarget'),brightness:$('wheelValue'),hex:$('wheelHex'),preview:$('wheelPreview'),
     read:field=>state[field],write:(field,value)=>{state[field]=value;applyTheme()},commit:persist
   });
-  for(const [id,field,fallback] of [
-    ['primaryColor','themePrimary',THEME_COLORS.primary],
-    ['accentColor','themeAccent',THEME_COLORS.accent]
-  ]){
-    $(id).addEventListener('input',e=>{
-      state[field]=themeColor(e.target.value,fallback);
-      applyTheme();
-    });
-    $(id).addEventListener('change',persist);
-  }
+  if(state.palette==='custom')colorWheel.refresh();
   $('pingSamples').addEventListener('change',e=>{state.pingSamples=Number(e.target.value);persist();toast(`Ping All: ${state.pingSamples} real-delay probe${state.pingSamples===1?'':'s'} per server`)});
   document.addEventListener('click',e=>{if(!e.target.closest('#contextMenu'))closeContextMenu();if(!e.target.closest('.paste-group'))closePasteMenu()});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeContextMenu();closePasteMenu()}});

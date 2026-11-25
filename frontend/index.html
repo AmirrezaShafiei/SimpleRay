@@ -110,14 +110,15 @@
     </fieldset>
     <div class="custom-wheel" id="themeColors" hidden>
       <canvas id="themeWheel" width="196" height="196" aria-hidden="true"></canvas>
-      <div class="color-choices">
-        <label>Primary <input type="color" id="primaryColor" value="#245995" /></label>
-        <label>Accent <input type="color" id="accentColor" value="#3eadef" /></label>
-        <div class="wheel-controls">
-          <label for="wheelTarget">Wheel edits</label>
-          <select id="wheelTarget"><option value="themePrimary">Primary</option><option value="themeAccent">Accent</option></select>
-          <label for="wheelLightness">Lightness</label>
-          <input id="wheelLightness" type="range" min="5" max="95" value="50">
+      <div class="wheel-controls">
+        <label for="wheelTarget">Color</label>
+        <select id="wheelTarget"><option value="themePrimary">Primary</option><option value="themeAccent">Accent</option></select>
+        <label for="wheelValue">Brightness</label>
+        <input id="wheelValue" type="range" min="0" max="100" value="100">
+        <label for="wheelHex">Hex</label>
+        <div class="wheel-hex">
+          <span id="wheelPreview" class="wheel-preview" aria-hidden="true"></span>
+          <input id="wheelHex" type="text" spellcheck="false" maxlength="7" autocomplete="off">
         </div>
       </div>
     </div>
