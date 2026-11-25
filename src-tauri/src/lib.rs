@@ -88,6 +88,10 @@ async fn ping_active_connection(app:AppHandle,manager:State<'_,EngineManager>,se
     manager.ping_active(&app,&server_id,false).await
 }
 #[tauri::command]
+async fn test_download_speed(manager: State<'_, EngineManager>, generation: u64) -> Result<f64, String> {
+    manager.test_download(generation).await
+}
+#[tauri::command]
 async fn measure_server_latency(
     app:AppHandle, webview:tauri::Webview, manager:State<'_,EngineManager>,
     outbound:Value, samples:u8, on_first:Option<tauri::ipc::JavaScriptChannelId>, test_id:Option<u32>,
@@ -255,7 +259,7 @@ pub fn run(){
             read_clipboard_text,fetch_subscription_text,
             phone_transfer_addresses,start_phone_transfer,poll_phone_transfer,cancel_phone_transfer,
             connect_server,disconnect_server,connection_status,restore_system_proxy,
-            ping_active_connection,measure_server_latency,
+            ping_active_connection,measure_server_latency,test_download_speed,
             begin_manual_ping,cancel_manual_ping,finish_manual_ping,
             configure_server_switching,accept_server_suggestion,undo_server_switch,
             dismiss_tray_suggestion,accept_tray_suggestion,tray_panel_action,publish_tray_panel,retry_tray_connection,

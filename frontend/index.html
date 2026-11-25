@@ -53,7 +53,14 @@
       <section class="connection-panel" aria-label="Connection status">
         <button id="connectionSwitch" type="button" class="toggle" role="switch" aria-checked="false" aria-label="Connect or disconnect"><span class="toggle-thumb"></span></button>
         <div class="connection-label"><span class="connection-state"><span class="state-led" id="stateLed"></span><strong id="connectionState">Disconnected</strong><button type="button" id="ipHistoryButton" class="icon-only ip-history-button" title="Exit IP history" aria-label="Exit IP history" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-globe"/></svg></button></span><button id="selectedServer" class="selected-server" title="Find configuration in list" type="button"><span id="selectedFlag" class="flag"><svg class="ui-icon" aria-hidden="true"><use href="#icon-globe"/></svg></span><span id="selectedText">No server selected</span><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron"/></svg></button></div>
-        <div class="traffic" id="traffic" aria-label="Measured traffic rate" hidden><span class="rate"><svg class="ui-icon down" aria-hidden="true"><use href="#icon-down"/></svg><span class="rate-values"><span id="downRate">0 KB/s</span><small id="downTotal" title="Downloaded in this session">0 B total</small></span></span><span class="rate"><svg class="ui-icon up" aria-hidden="true"><use href="#icon-up"/></svg><span class="rate-values"><span id="upRate">0 KB/s</span><small id="upTotal" title="Uploaded in this session">0 B total</small></span></span></div>
+        <div class="traffic" id="traffic" aria-label="Connection traffic" hidden>
+          <span class="rate"><svg class="ui-icon down" aria-hidden="true"><use href="#icon-down"/></svg><span class="rate-values"><span id="downRate">0 KB/s</span><small id="downTotal" title="Downloaded in this session">0 B total</small></span></span>
+          <span class="rate"><svg class="ui-icon up" aria-hidden="true"><use href="#icon-up"/></svg><span class="rate-values"><span id="upRate">0 KB/s</span><small id="upTotal" title="Uploaded in this session">0 B total</small></span></span>
+          <button type="button" class="download-test" id="downloadTest" title="Measure download speed through the active tunnel (up to 10 MB)">
+            <svg class="ui-icon" aria-hidden="true"><use href="#icon-down"/></svg>
+            <span id="downloadTestLabel" aria-live="polite">Test download</span>
+          </button>
+        </div>
         <div class="latency-current">
           <div><small id="latencyLabel">Latency</small><strong id="selectedLatency">—</strong><small id="connectionStability" hidden></small></div>
           <button type="button" id="activePingButton" class="icon-button" aria-label="Test active connection" title="Test this connection through the running proxy" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-refresh"/></svg></button>
@@ -126,13 +133,15 @@
     <h3>Route by website</h3>
     <form id="siteRouteForm" class="route-form">
       <label for="siteRouteDomain">Domain</label>
-      <input id="siteRouteDomain" required maxlength="253" placeholder="example.com">
+      <input id="siteRouteDomain" required maxlength="2048" placeholder="example.com or .ir" aria-describedby="siteRouteHint siteRouteFeedback">
       <select id="siteRouteChoice" aria-label="Website route"><option value="direct">Direct</option><option value="proxy">Through tunnel</option></select>
       <button type="submit" class="dialog-action">Add site</button>
+      <button type="submit" class="dialog-action" id="checkSiteRoute">Check route</button>
     </form>
+    <output id="siteRouteFeedback" class="field-hint" for="siteRouteDomain" aria-live="polite"></output>
     <ul id="siteRouteList" class="route-list"></ul>
     <p id="routingError" class="form-error" role="alert"></p>
-    <p class="field-hint">App rules take priority over website rules. Website rules cover the domain and its subdomains.</p>
+    <p class="field-hint" id="siteRouteHint">App rules take priority, followed by the most specific website rule. A suffix such as .ir covers all sites ending in .ir.</p>
     <div class="form-actions"><button id="saveRouting" type="button" class="dialog-action primary">Save routing</button></div>
   </dialog>
   <dialog id="ipHistoryDialog" class="settings-dialog" aria-labelledby="ipHistoryTitle">

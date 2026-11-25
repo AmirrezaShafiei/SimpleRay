@@ -15,6 +15,10 @@ use crate::switching::{self, HealthStatus, Monitor, Profile, SwitchDecision, Swi
 
 const PROBE_URL:&str="https://www.gstatic.com/generate_204";
 const TRACE_URL:&str="https://www.cloudflare.com/cdn-cgi/trace";
+const DOWNLOAD_TEST_URL: &str = "https://speed.cloudflare.com/__down?bytes=10000000";
+const DOWNLOAD_TEST_LIMIT: usize = 10_000_000;
+const DOWNLOAD_TEST_WINDOW: Duration = Duration::from_secs(5);
+const MIN_DOWNLOAD_SAMPLE: usize = 16 * 1024;
 const RETRY_INTERVAL:Duration=Duration::from_secs(3);
 #[derive(Clone, Copy)]
 struct Probe { elapsed_ms:u64, ip:Option<std::net::IpAddr> }
@@ -39,6 +43,7 @@ enum ProbeMode {
 pub struct ConnectionStatus {
     pub state:String,
     pub server_id:Option<String>,
+    pub connection_generation:Option<u64>,
     pub system_proxy:bool,
     pub connection_mode:Mode,
     pub download_bps:f64,
@@ -53,7 +58,7 @@ pub struct ConnectionStatus {
     pub health:HealthStatus,
 }
 impl ConnectionStatus {
-    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,system_proxy:false,connection_mode:Mode::SystemProxy,download_bps:0.,upload_bps:0.,traffic_available:false,download_bytes:None,upload_bytes:None,initial_latency_ms:None,last_good_ping_ms:None,outage_seconds:None,error,health:HealthStatus::default()}}
+    fn off(error:Option<String>)->Self{Self{state:"disconnected".into(),server_id:None,connection_generation:None,system_proxy:false,connection_mode:Mode::SystemProxy,download_bps:0.,upload_bps:0.,traffic_available:false,download_bytes:None,upload_bytes:None,initial_latency_ms:None,last_good_ping_ms:None,outage_seconds:None,error,health:HealthStatus::default()}}
 }
 #[derive(Debug,Clone,Serialize)]
 #[serde(rename_all="camelCase")]
@@ -115,6 +120,7 @@ struct EngineRuntime {
 pub struct EngineManager {
     runtime: Mutex<EngineRuntime>,
     active_probe: Mutex<()>,
+    download_test: Mutex<()>,
     candidate_probes: Semaphore,
     network_events: Mutex<()>,
     manual_ping: Mutex<ManualPing>,
@@ -122,7 +128,7 @@ pub struct EngineManager {
 
 impl Default for EngineManager {
     fn default() -> Self {
-        Self { runtime: Mutex::default(), active_probe: Mutex::default(), candidate_probes: Semaphore::new(4), network_events: Mutex::new(()), manual_ping: Mutex::default() }
+        Self { runtime: Mutex::default(), active_probe: Mutex::default(), download_test: Mutex::default(), candidate_probes: Semaphore::new(4), network_events: Mutex::new(()), manual_ping: Mutex::default() }
     }
 }
 
@@ -279,6 +285,34 @@ fn probe_client(port: u16, request_timeout: Duration) -> Result<reqwest::Client,
     reqwest::Client::builder().proxy(proxy).timeout(request_timeout)
         .redirect(reqwest::redirect::Policy::none()).pool_max_idle_per_host(0)
         .build().map_err(|_|"Could not create HTTP probe".into())
+}
+
+async fn download_speed(port: u16) -> Result<f64, String> {
+    let client = probe_client(port, Duration::from_secs(12))?;
+    let request = client.get(DOWNLOAD_TEST_URL)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .header(reqwest::header::CACHE_CONTROL, "no-cache");
+    let mut response = timeout(Duration::from_secs(6), request.send()).await
+        .map_err(|_| "The download test timed out waiting for data")?
+        .map_err(|_| "Could not reach the download test server through the tunnel")?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err("The download test server returned an error".into());
+    }
+
+    let start = tokio::time::Instant::now();
+    let deadline = start + DOWNLOAD_TEST_WINDOW;
+    let mut received = 0;
+    while received < DOWNLOAD_TEST_LIMIT {
+        match tokio::time::timeout_at(deadline, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => received += chunk.len().min(DOWNLOAD_TEST_LIMIT - received),
+            Ok(Ok(None)) | Ok(Err(_)) => return Err("The download test ended before the expected data arrived".into()),
+            Err(_) => break,
+        }
+    }
+    if received < MIN_DOWNLOAD_SAMPLE {
+        return Err("Too little data arrived to measure download speed".into());
+    }
+    Ok(received as f64 / start.elapsed().as_secs_f64().max(0.001))
 }
 
 async fn trace_probe(client: &reqwest::Client) -> Option<Probe> {
@@ -594,6 +628,24 @@ impl EngineManager {
         active.system_proxy=true;
         self.snapshot_locked(&runtime)
     }
+    pub async fn test_download(&self, generation: u64) -> Result<f64, String> {
+        let _test = self.download_test.try_lock().map_err(|_| "A download test is already running")?;
+        let port = {
+            let runtime = self.runtime.lock().await;
+            if runtime.pending || runtime.generation != generation {
+                return Err("The active connection is changing".into());
+            }
+            runtime.active.as_ref().map(|active| active.core.probe_port)
+                .ok_or("Connect to a server to test download speed")?
+        };
+        let result = download_speed(port).await;
+        let runtime = self.runtime.lock().await;
+        if runtime.generation != generation || !runtime.active.as_ref().is_some_and(|active| active.core.probe_port == port) {
+            return Err("The active connection changed during the download test".into());
+        }
+        result
+    }
+
     pub async fn ping_active(&self, app:&AppHandle, server_id: &str, scheduled: bool) -> Result<u64, String> {
         let _probe=match self.active_probe.try_lock() {
             Ok(guard)=>guard,
@@ -701,6 +753,7 @@ impl EngineManager {
         if let Some(active)=&session.active{
             let transferred=active.core.api_port.map(|_|active.last_traffic.since(active.traffic_origin));
             Ok(ConnectionStatus{state:"connected".into(),server_id:Some(active.server_id.clone()),
+                connection_generation:Some(session.generation),
                 system_proxy:active.system_proxy,connection_mode:active.routing.mode,download_bps:active.download_bps,upload_bps:active.upload_bps,
                 traffic_available:active.traffic_available,
                 download_bytes:transferred.map(|bytes|bytes.down),upload_bytes:transferred.map(|bytes|bytes.up),

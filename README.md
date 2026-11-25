@@ -2,13 +2,15 @@
 
 Single-window, no-sidebar V2Ray/Xray client with three theme palettes, a Custom palette, and a separate Light/Dark/System setting, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
 
-> **Status:** Version `0.5.0-beta.7` builds on Beta 6 with tray suggestions, separate palette and appearance controls, and two default ping probes. The Windows x64 installer and its SHA-256 checksum are attached to the private beta release after the Windows build and installation smoke test pass.
+Download the Windows x64 installer and its SHA-256 checksum from the [SimpleRAY 1.1.2 release](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v1.1.2).
 
 ## Features in source
 - Clipboard import of VMess, VLESS, Trojan, Shadowsocks, WireGuard, Hysteria2, SOCKS5, and HTTP(S) proxy links. WireGuard configuration text and named HTTP(S) subscriptions are supported.
 - Click any table header to sort. Up to three pinned servers stay at the top. Flags come from the country code, name, or flag in the profile label.
 - Context-menu Ping and Ping All offer 1, 2 or 3 HTTP-through-proxy probes, with two by default for new settings. Multi-probe requests show the first result and then the average of successful probes.
 - One switch for real connect/disconnect using official Xray-core and Windows System Proxy. The connected panel shows live rates and the total bytes of the current session.
+- **Test download** under the live rates measures the active tunnel with a transfer of up to 10 MB. Click the result to run the test again.
+- **Route by website** accepts domains, pasted web URLs, and suffixes such as `.ir`. Use **Check route** to preview which website rule matches. App rules take priority in TUN mode.
 - System Tray Show / Connect-Disconnect / Exit; closing window hides to tray by default; explicit Exit attempts System Proxy restoration before exit.
 - Start with Windows under HKCU user registry; separate Auto-connect option (OFF by default).
 - Ocean, Jade, Violet and Custom each work with Light, Dark or System appearance. Custom saves primary and accent colors in Settings.
@@ -30,7 +32,7 @@ For manual Xray staging, use `scripts/stage-xray.ps1` with a separately trusted 
 - The workflow publishes the unsigned setup and checksum directly to [Releases](https://github.com/AmirrezaShafiei/SimpleRay/releases). The preceding beta build produced an installer but could not upload it to Actions artifact storage because its quota was exhausted.
 
 ## Security and limits
-**Sensitive share URIs and subscription URLs are currently stored as plaintext local WebView data. Use only on a trusted Windows user profile. Encrypted OS-backed storage is required before wide public distribution.** This beta has no TUN, split tunnel or browser extension. The NSIS installer is not digitally signed.
+**Sensitive share URIs and subscription URLs are currently stored as plaintext local WebView data. Use only on a trusted Windows user profile. Encrypted OS-backed storage is required before wide public distribution.** TUN mode requires administrator access. The NSIS installer is not digitally signed.
 
 ## Project handoff
 Read [PROJECT_STATUS.md](PROJECT_STATUS.md), [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), [ARCHITECTURE.md](ARCHITECTURE.md), then [PHASE5_REPORT.md](PHASE5_REPORT.md) and [PHASE6_REPORT.md](PHASE6_REPORT.md). Screenshot: [design/reference.jpg](design/reference.jpg).

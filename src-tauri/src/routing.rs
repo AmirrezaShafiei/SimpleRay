@@ -32,6 +32,11 @@ pub struct AppRule {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SiteRule { pub domain: String, pub route: Route }
+impl SiteRule {
+    fn domain_key(&self) -> &str {
+        self.domain.strip_prefix('.').unwrap_or(&self.domain)
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
@@ -56,20 +61,22 @@ pub fn load(app: &AppHandle) -> Result<Routing, String> {
 
 fn normalized_domain(value: &str) -> Result<String, String> {
     let value = value.trim().trim_end_matches('.');
+    let suffix = value.starts_with('.');
+    let value = value.strip_prefix('.').unwrap_or(value);
     if value.is_empty() || value.len() > 253 || value.chars().any(|c| "/\\@:#?*%".contains(c) || c.is_whitespace()) {
-        return Err("Enter a domain such as example.com".into());
+        return Err("Enter a domain such as example.com or a suffix such as .ir".into());
     }
     let url=reqwest::Url::parse(&format!("https://{value}/"))
         .map_err(|_| "Enter a valid domain name")?;
     let domain=url.host_str().filter(|host|host.parse::<std::net::IpAddr>().is_err())
         .ok_or("Enter a domain name, without an IP address or URL")?.to_string();
-    if !domain.contains('.') || domain.split('.').any(|label| {
+    if domain.len() > 253 || (!suffix && !domain.contains('.')) || domain.split('.').any(|label| {
         label.is_empty() || label.len() > 63 || label.starts_with('-') || label.ends_with('-')
             || !label.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
     }) {
-        return Err("Enter a valid domain such as example.com".into());
+        return Err("Enter a valid domain such as example.com or .ir".into());
     }
-    Ok(domain)
+    Ok(if suffix { format!(".{domain}") } else { domain })
 }
 
 pub fn validate(settings: &mut Routing) -> Result<(), String> {
@@ -101,11 +108,11 @@ pub fn validate(settings: &mut Routing) -> Result<(), String> {
     let mut domains = HashSet::new();
     for item in &mut settings.sites {
         item.domain = normalized_domain(&item.domain)?;
-        if !domains.insert(item.domain.clone()) {
+        if !domains.insert(item.domain_key().to_string()) {
             return Err("Only one rule is allowed for each domain".into());
         }
     }
-    settings.sites.sort_by_key(|rule| std::cmp::Reverse(rule.domain.len()));
+    settings.sites.sort_by_key(|rule| std::cmp::Reverse(rule.domain_key().len()));
     Ok(())
 }
 
@@ -132,7 +139,7 @@ pub fn config(base: &mut Value, settings: &Routing, health_port: u16) {
         }
     }
     for item in &settings.sites {
-        rules.push(json!({"type":"field","domain":[format!("domain:{}",item.domain)],"outboundTag":item.route.tag()}));
+        rules.push(json!({"type":"field","domain":[format!("domain:{}",item.domain_key())],"outboundTag":item.route.tag()}));
     }
     base["outbounds"].as_array_mut().unwrap().push(json!({"tag":"direct","protocol":"freedom"}));
     base["routing"]=json!({"rules":rules});
@@ -255,16 +262,26 @@ mod tests {
         let mut base=json!({"inbounds":[],"outbounds":[],"routing":{"rules":[
             {"inboundTag":["api-in"],"outboundTag":"api"}
         ]}});
-        config(&mut base,&Routing{sites:vec![SiteRule{domain:"example.com".into(),route:Route::Direct}],..Routing::default()},20000);
+        let mut settings=Routing{sites:vec![
+            SiteRule{domain:".IR".into(),route:Route::Direct},
+            SiteRule{domain:"example.ir".into(),route:Route::Proxy},
+        ],..Routing::default()};
+        validate(&mut settings).unwrap();
+        config(&mut base,&settings,20000);
         assert_eq!(base["routing"]["rules"][0]["outboundTag"],"api");
         assert_eq!(base["routing"]["rules"][1]["outboundTag"],"proxy");
-        assert_eq!(base["routing"]["rules"][2]["outboundTag"],"direct");
+        assert_eq!(base["routing"]["rules"][2]["domain"][0],"domain:example.ir");
+        assert_eq!(base["routing"]["rules"][2]["outboundTag"],"proxy");
+        assert_eq!(base["routing"]["rules"][3]["domain"][0],"domain:ir");
+        assert_eq!(base["routing"]["rules"][3]["outboundTag"],"direct");
         assert_eq!(base["inbounds"][0]["listen"],"127.0.0.1");
     }
     #[test]
     fn normalizes_domain_and_rejects_urls_ips_and_wildcards() {
         assert_eq!(normalized_domain("Example.COM.").unwrap(),"example.com");
-        for invalid in ["127.0.0.1","https://example.org","*.example.org","-site.net"] {
+        assert_eq!(normalized_domain(".IR.").unwrap(),".ir");
+        assert_eq!(normalized_domain(".AC.IR").unwrap(),".ac.ir");
+        for invalid in ["ir","127.0.0.1","https://example.org","*.example.org","-site.net","..ir"] {
             assert!(normalized_domain(invalid).is_err(),"{invalid}");
         }
     }

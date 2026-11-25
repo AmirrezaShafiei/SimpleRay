@@ -12,6 +12,12 @@ export function bytesPerSecond(value){
   const amount=formatBytes(value);
   return amount==='—'?amount:`${amount}/s`;
 }
+export function formatDownloadSpeed(value){
+  if(!Number.isFinite(value)||value<=0)return '—';
+  const megabytes=value>=1_000_000;
+  const amount=value/(megabytes?1_000_000:1_000);
+  return `${Number(amount.toFixed(amount>=10?1:2))} ${megabytes?'MB':'KB'}/s`;
+}
 export function normalizedLatencyResult(result,samples){
   const attempted=Number(result?.attempted)||samples;
   const successful=Number(result?.successful)||0;

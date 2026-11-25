@@ -2,7 +2,7 @@ import {filterServers,sortServers,latencyClass,stabilityLevel,SORT_COLUMNS} from
 import {parseImport,parseShareLink} from './config.js';
 import {createRepository} from './store.js';
 import {outboundFromShareLink} from './xray-config.js';
-import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,latencyResponseCount,normalizedLatencyResult,pingPool,pingWithFallback} from './runtime.js';
+import {bytesPerSecond,DEFAULT_PING_SAMPLES,formatBytes,formatDownloadSpeed,latencyResponseCount,normalizedLatencyResult,pingPool,pingWithFallback} from './runtime.js';
 import {displayServerName,renderFlag} from './flags.js';
 import {phoneTransferControls} from './phone-transfer.js';
 import {attachColorWheel} from './color-wheel.js';
@@ -27,6 +27,7 @@ let toastTimeout;
 let connectionPoll;
 let connectionRevision=0;
 let activePing;
+let downloadTest;
 let editNameId;
 let colorWheel;
 let routingEditor;
@@ -221,6 +222,19 @@ function renderConnection(){
   for(const [element,total] of [['downTotal',c.downloadBytes],['upTotal',c.uploadBytes]]){
     $(element).textContent=Number.isFinite(total)?`${formatBytes(total)} total`:'—';
   }
+  if(!connected||downloadTest?.generation!==c.connectionGeneration)downloadTest=null;
+  const speedButton=$('downloadTest');
+  const testing=downloadTest?.pending===true;
+  speedButton.disabled=!nativeHost()||state.connectionBusy!==false||health?.switching===true||
+    !Number.isInteger(c.connectionGeneration)||testing;
+  speedButton.setAttribute('aria-busy',String(testing));
+  speedButton.title=downloadTest?.error??(downloadTest?.rate?'Test download again (up to 10 MB)':
+    'Measure download speed through the active tunnel (up to 10 MB)');
+  const speedLabel=$('downloadTestLabel');
+  const speedText=testing?'Testing…':downloadTest?.error?'Test failed':downloadTest?.rate??'Test download';
+  if(speedLabel.textContent!==speedText)speedLabel.textContent=speedText;
+  speedButton.setAttribute('aria-label',downloadTest?.rate?`Download speed: ${speedText}. Test again.`:
+    downloadTest?.error?`Download test failed. ${downloadTest.error}. Test again.`:speedText);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('no-servers',!server);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('preview-on',connected&&!unhealthy&&routeActive);
   $('connectionSwitch').closest('.connection-panel').classList.toggle('connecting',Boolean(state.connectionBusy));
@@ -403,6 +417,22 @@ async function testActiveConnection(){
     if(activePing===request)activePing=null;
     renderConnection();
     await refreshConnectionStatus({silent:true});
+  }
+}
+async function testDownloadSpeed(){
+  if($('downloadTest').disabled||state.connection.state!=='connected')return;
+  const request={generation:state.connection.connectionGeneration,pending:true};
+  downloadTest=request;
+  renderConnection();
+  try{
+    const rate=await nativeInvoke('test_download_speed',{generation:request.generation});
+    request.rate=formatDownloadSpeed(rate);
+  }catch(error){
+    request.error=errorMessage(error);
+  }finally{
+    request.pending=false;
+    renderConnection();
+    void refreshConnectionStatus({silent:true});
   }
 }
 async function respondToSwitch(undo){
@@ -832,6 +862,7 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
   });
   $('connectionSwitch').addEventListener('click',()=>void toggleConnection());
   $('activePingButton').addEventListener('click',()=>void testActiveConnection());
+  $('downloadTest').addEventListener('click',()=>void testDownloadSpeed());
   $('repairProxyButton').addEventListener('click',()=>void restoreSystemProxy());
   $('applySuggestion').addEventListener('click',()=>void respondToSwitch(false));
   $('undoSwitch').addEventListener('click',()=>void respondToSwitch(true));

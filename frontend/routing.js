@@ -1,9 +1,45 @@
 const $=id=>document.getElementById(id);
 const empty=()=>({mode:'systemProxy',apps:[],sites:[]});
 const message=error=>error instanceof Error?error.message:String(error);
+
+const domainKey=domain=>domain.replace(/^\./,'');
+const domainError='Enter a website address such as example.com, https://example.com, or .ir.';
+
+export function normalizeWebsiteRule(input){
+  const value=input.trim();
+  const isUrl=/^https?:\/\/[^/]/i.test(value);
+  const suffix=value.startsWith('.');
+  const text=domainKey(value);
+  if(!text||(!isUrl&&/[\s/\\@:#?*%]/.test(text)))throw new Error(domainError);
+  let url;
+  try{url=new URL(isUrl?value:`https://${text}`)}
+  catch{throw new Error(domainError)}
+  const domain=url.hostname.replace(/\.$/,'');
+  if(url.username||url.password||domain.length>253||(!suffix&&!domain.includes('.'))||
+    /^\d+(?:\.\d+){3}$/.test(domain)||
+    domain.split('.').some(label=>!(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))){
+    throw new Error(domainError);
+  }
+  return suffix?`.${domain}`:domain;
+}
+
+export function matchWebsiteRule(domain,sites){
+  let best;
+  for(const entry of sites){
+    const key=domainKey(entry.domain);
+    if((domain===key||domain.endsWith(`.${key}`))&&(!best||key.length>domainKey(best.domain).length)){
+      best=entry;
+    }
+  }
+  return best;
+}
+
 export function createRoutingEditor({invoke,showDialog,nativeHost,onSaved}){
   let settings=empty();
   const error=$('routingError');
+  const siteInput=$('siteRouteDomain');
+  const siteList=$('siteRouteList');
+  const siteFeedback=$('siteRouteFeedback');
   function buttons(route,update){
     const select=document.createElement('select');
     select.setAttribute('aria-label','Route');
@@ -42,9 +78,15 @@ export function createRoutingEditor({invoke,showDialog,nativeHost,onSaved}){
       }),lock,removeButton(()=>settings.apps.splice(i,1)));
       return li;
     }));
-    $('siteRouteList').replaceChildren(...settings.sites.map((entry,i)=>{
+    siteList.replaceChildren(...settings.sites.map((entry,i)=>{
       const li=row(entry.domain);
-      li.append(buttons(entry.route,route=>{entry.route=route}),removeButton(()=>settings.sites.splice(i,1)));
+      li.append(buttons(entry.route,route=>{
+        entry.route=route;
+        siteFeedback.textContent='';
+      }),removeButton(()=>{
+        settings.sites.splice(i,1);
+        siteFeedback.textContent='';
+      }));
       return li;
     }));
   }
@@ -66,13 +108,34 @@ export function createRoutingEditor({invoke,showDialog,nativeHost,onSaved}){
   });
   $('siteRouteForm').addEventListener('submit',event=>{
     event.preventDefault();
-    const value=$('siteRouteDomain').value.trim();
-    const domain=value.toLowerCase().replace(/\.$/,'');
-    if(settings.sites.some(entry=>entry.domain===domain))return;
+    const checking=event.submitter?.id==='checkSiteRoute';
+    let domain;
+    try{domain=normalizeWebsiteRule(siteInput.value)}
+    catch(failure){siteFeedback.textContent=message(failure);return}
+    if(checking){
+      if(domain.startsWith('.')){
+        siteFeedback.textContent='Enter a specific website to check its route.';
+        return;
+      }
+      const rule=matchWebsiteRule(domain,settings.sites);
+      const route=rule?.route==='direct'?'Direct':'Through tunnel';
+      siteFeedback.textContent=rule?`${route} · Matches ${rule.domain}`:`${route} · Default website route`;
+      return;
+    }
+    const existing=settings.sites.findIndex(entry=>domainKey(entry.domain)===domainKey(domain));
+    if(existing!==-1){
+      siteFeedback.textContent=`${settings.sites[existing].domain} already has a rule. Change its route in the list.`;
+      const row=siteList.children[existing];
+      row.querySelector('select').focus();
+      row.scrollIntoView({block:'nearest'});
+      return;
+    }
     settings.sites.push({domain,route:$('siteRouteChoice').value});
-    $('siteRouteDomain').value='';
+    siteInput.value='';
+    siteFeedback.textContent='';
     render();
   });
+  siteInput.addEventListener('input',()=>{siteFeedback.textContent=''});
   $('saveRouting').addEventListener('click',async()=>{
     const save=$('saveRouting');
     save.disabled=true;error.textContent='';
@@ -85,7 +148,7 @@ export function createRoutingEditor({invoke,showDialog,nativeHost,onSaved}){
   return {async open(){
     if(!nativeHost())return;
     error.textContent='';
-    $('appRoutePath').value='';$('siteRouteDomain').value='';
+    $('appRoutePath').value='';siteInput.value='';siteFeedback.textContent='';
     showDialog('routingDialog');
     try{settings=await invoke('get_routing_settings');render()}
     catch(failure){error.textContent=message(failure)}
