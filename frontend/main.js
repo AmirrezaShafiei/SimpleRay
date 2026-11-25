@@ -20,7 +20,8 @@ let lastSwitchConfig;
 let configUpdate=Promise.resolve();
 const SUBSCRIPTION_CHECK_INTERVAL = 60_000;
 const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,editingSubscriptionId:null,subscriptionFilterId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false};
-const checkedServerIds = new Set();
+const selectedServerIds = new Set();
+let selectionAnchorId = null;
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -127,9 +128,10 @@ function sync(){
   state.servers=repo.rows();
   state.selected=db.selectedId;
   const serverIds = new Set(state.servers.map(server => server.id));
-  for (const id of checkedServerIds) {
-    if (!serverIds.has(id)) checkedServerIds.delete(id);
+  for (const id of selectedServerIds) {
+    if (!serverIds.has(id)) selectedServerIds.delete(id);
   }
+  if (!serverIds.has(selectionAnchorId)) selectionAnchorId = null;
   renderSubscriptionFilter(db.subscriptions);
   render();
   renderSubscriptionList(db.subscriptions);
@@ -173,14 +175,13 @@ function getSelected(){return state.servers.find(s=>s.id===state.selected)||null
 function serverRow(id){return $('serverRows').querySelector(`[data-id="${CSS.escape(String(id))}"]`)}
 function setSelected(id){
   if(id===state.selected||!safeAction(()=>repo.setSelected(id)))return;
-  const previous=serverRow(state.selected);
-  previous?.classList.remove('selected');
-  previous?.setAttribute('aria-selected','false');
+  const previousId=state.selected;
   state.selected=id;
   if(nativeHost())void nativeInvoke("cancel_network_recovery").catch(()=>{});
-  const selected=serverRow(id);
-  selected?.classList.add('selected');
-  selected?.setAttribute('aria-selected','true');
+  for (const rowId of [previousId, id]) {
+    const row = serverRow(rowId);
+    if (row) renderRowSelection(row);
+  }
   renderConnection();
 }
 function nativeHost(){return Boolean(window.__TAURI_INTERNALS__?.invoke)}
@@ -580,42 +581,46 @@ function orderedRows(){
     : state.servers;
   return sortServers(filterServers(servers, state.query).map(latencyView), state.sortKey, state.sortDirection);
 }
-function checkedServers() {
-  return state.servers.filter(server => checkedServerIds.has(server.id));
+function selectedServers() {
+  return state.servers.filter(server => selectedServerIds.has(server.id));
 }
 function renderBulkSelection() {
-  const boxes = [...$('serverRows').querySelectorAll('.server-checkbox')];
-  const checked = boxes.filter(box => box.checked).length;
-  const selectVisible = $('selectVisibleServers');
-  selectVisible.disabled = boxes.length === 0;
-  selectVisible.checked = checked > 0 && checked === boxes.length;
-  selectVisible.indeterminate = checked > 0 && checked < boxes.length;
-  $('bulkServerActions').hidden = checkedServerIds.size === 0;
-  $('bulkServerCount').textContent = `${checkedServerIds.size} selected`;
+  $('bulkServerActions').hidden = selectedServerIds.size === 0;
+  $('bulkServerCount').textContent = `${selectedServerIds.size} selected`;
   $('pingSelectedButton').disabled = Boolean(pingJob);
 }
-function checkServer(box, checked) {
-  const row = box.closest('tr');
-  if (checked) checkedServerIds.add(row.dataset.id);
-  else checkedServerIds.delete(row.dataset.id);
-  box.checked = checked;
-  row.classList.toggle('bulk-selected', checked);
+function renderRowSelection(row) {
+  const id = row.dataset.id;
+  const selected = selectedServerIds.has(id);
+  row.classList.toggle('selected', selected);
+  row.classList.toggle('connection-target', id === state.selected);
+  row.setAttribute('aria-selected', String(selected));
 }
-function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
-    const selectCell = tr.insertCell();
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.className = 'server-checkbox';
-    checkbox.checked = checkedServerIds.has(s.id);
-    checkbox.setAttribute('aria-label', `Select ${displayServerName(s)} for bulk actions`);
-    tr.classList.toggle('bulk-selected', checkbox.checked);
-    checkbox.addEventListener('click', event => event.stopPropagation());
-    checkbox.addEventListener('dblclick', event => event.stopPropagation());
-    checkbox.addEventListener('change', () => {
-      checkServer(checkbox, checkbox.checked);
-      renderBulkSelection();
-    });
-    selectCell.append(checkbox);
+function renderServerSelection() {
+  for (const row of $('serverRows').rows) renderRowSelection(row);
+  renderBulkSelection();
+}
+function selectServerRow(id, rows, {ctrlKey = false, shiftKey = false} = {}) {
+  if (!ctrlKey) selectedServerIds.clear();
+  if (shiftKey) {
+    const target = rows.findIndex(server => server.id === id);
+    let anchor = rows.findIndex(server => server.id === selectionAnchorId);
+    if (anchor < 0) {
+      anchor = target;
+      selectionAnchorId = id;
+    }
+    const start = Math.min(anchor, target);
+    const end = Math.max(anchor, target);
+    for (const server of rows.slice(start, end + 1)) selectedServerIds.add(server.id);
+  } else {
+    selectionAnchorId = id;
+    if (selectedServerIds.has(id)) selectedServerIds.delete(id);
+    else selectedServerIds.add(id);
+    if (!ctrlKey) setSelected(id);
+  }
+  renderServerSelection();
+}
+function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.tabIndex=0;renderRowSelection(tr);
     const starCell=tr.insertCell();
     const actions=document.createElement('div');actions.className='row-actions';
     const star=document.createElement('button');star.type='button';star.className='star'+(s.favorite?' is-favorite':'');star.innerHTML=icon('star');star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);
@@ -652,12 +657,34 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
       latencyCell.append(responses);
     }
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
-    tr.addEventListener('click',()=>setSelected(s.id));tr.addEventListener('dblclick',()=>{setSelected(s.id);void connectSelected(s.id)});
+    tr.addEventListener('click', e => selectServerRow(s.id, rows, e));
+    tr.addEventListener('dblclick', e => {
+      if (e.ctrlKey || e.shiftKey) return;
+      void connectSelected(s.id);
+    });
     tr.addEventListener('contextmenu',e=>{e.preventDefault();showContextMenu(s.id,e.clientX,e.clientY)});
-    tr.addEventListener('keydown',e=>{if(e.target!==tr)return;if(e.key==='Enter'){e.preventDefault();setSelected(s.id);void connectSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
+    tr.addEventListener('keydown', e => {
+      if (e.target !== tr) return;
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (!e.repeat) selectServerRow(s.id, rows, e);
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        selectServerRow(s.id, rows);
+        void connectSelected(s.id);
+      }
+      if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+        e.preventDefault();
+        const rect = tr.getBoundingClientRect();
+        showContextMenu(s.id, rect.left + 150, rect.top + 30);
+      }
+    });
+    body.append(tr);
+  }
   if (focusedId) {
     const row = serverRow(focusedId);
-    const selector = ['.server-checkbox', '.star', '.pin-button'].find(value => focused.matches(value));
+    const selector = ['.star', '.pin-button', '.rename-config'].find(value => focused.matches(value));
     (selector ? row?.querySelector(selector) : row)?.focus({preventScroll:true});
   }
   const empty = $('emptyMessage');
@@ -708,14 +735,14 @@ function addMenuButton(parent,iconName,label,action,{disabled=false,danger=false
 function showContextMenu(id,x,y) {
   const server = state.servers.find(item => item.id === id);
   if (!server) return;
-  const group = checkedServerIds.has(id) && checkedServerIds.size > 1;
-  const targets = group ? checkedServers() : [server];
+  const group = selectedServerIds.has(id) && selectedServerIds.size > 1;
+  const targets = group ? selectedServers() : [server];
   state.contextId = id;
   const menu = $('contextMenu');
   menu.replaceChildren();
   if (!group) {
-    setSelected(id);
-    addMenuButton(menu,'play','Connect / Select',()=>void connectSelected(id));
+    if (!selectedServerIds.has(id)) selectServerRow(id, []);
+    addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});
   }
   for (const samples of [1,2,3]) {
     const label = group ? `Ping ${targets.length} selected` : 'Ping';
@@ -1021,19 +1048,14 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
     }
   }, SUBSCRIPTION_CHECK_INTERVAL);
   $('updateButton').addEventListener('click',()=>void updateAll());
-  $('selectVisibleServers').addEventListener('change', event => {
-    for (const box of $('serverRows').querySelectorAll('.server-checkbox')) {
-      checkServer(box, event.target.checked);
-    }
-    renderBulkSelection();
-  });
   $('clearServerSelection').addEventListener('click', () => {
-    checkedServerIds.clear();
-    render();
-    $('selectVisibleServers').focus();
+    selectedServerIds.clear();
+    selectionAnchorId = null;
+    renderServerSelection();
+    (serverRow(state.selected) ?? $('serverRows').rows[0] ?? $('searchInput')).focus();
   });
-  $('pingSelectedButton').addEventListener('click',()=>void pingServers(checkedServers(),state.pingSamples));
-  $('deleteSelectedButton').addEventListener('click',()=>void removeServers(checkedServers()));
+  $('pingSelectedButton').addEventListener('click',()=>void pingServers(selectedServers(),state.pingSamples));
+  $('deleteSelectedButton').addEventListener('click',()=>void removeServers(selectedServers()));
   $('pingAllButton').addEventListener('click',()=>{
     if(pingJob)void cancelPing();
     else void pingServers(state.servers,state.pingSamples);
