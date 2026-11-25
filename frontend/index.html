@@ -85,12 +85,6 @@
         <button id="clearSubscriptionFilter" type="button" class="tool-button subscription-filter" title="Clear subscription filter" hidden><span id="subscriptionFilterName"></span><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
         <div class="table-scroll"><table id="serversTable" role="grid" aria-label="Servers" aria-multiselectable="true"><thead><tr><th><button class="sort-head favorite-head" data-sort="favorite" aria-label="Sort by favorites"><svg class="ui-icon" aria-hidden="true"><use href="#icon-star"/></svg><span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="name">Name <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="type">Type <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="latency">Latency (ms) <span class="sort-indicator"></span></button></th><th><button class="sort-head" data-sort="source">Source <span class="sort-indicator"></span></button></th></tr></thead><tbody id="serverRows"></tbody></table></div>
         <p class="empty-message" id="emptyMessage" hidden>No configurations found. Use Paste or its menu to add servers.</p>
-        <div id="bulkServerActions" class="bulk-server-actions" hidden>
-          <span id="bulkServerCount" role="status"></span>
-          <button id="pingSelectedButton" type="button" class="tool-button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-activity"/></svg> Ping selected</button>
-          <button id="deleteSelectedButton" type="button" class="tool-button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-delete"/></svg> Delete selected</button>
-          <button id="clearServerSelection" type="button" class="tool-button" title="Clear server selection">Clear</button>
-        </div>
       </section>
       <footer class="app-footer"><div class="footer-left"><span class="footer-note" id="footerConnection"><span class="status-mini"></span> Disconnected</span></div><div class="footer-right"><span>Connection mode <strong id="systemProxyStatus">Auto with connection</strong></span><button id="repairProxyButton" type="button" class="proxy-repair" hidden>Restore proxy</button><span class="divider-vertical"></span><span>Start at Startup <strong id="startupStatus">Off</strong></span></div></footer>
     </main>

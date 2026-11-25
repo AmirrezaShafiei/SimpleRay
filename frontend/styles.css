@@ -76,10 +76,6 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .subscription-meta{flex:1;min-width:150px;overflow:hidden}.subscription-meta p.subscription-title-row{margin:0}
 .subscription-title{display:inline;max-width:100%;padding:0;border:0;background:none;color:var(--text);font:inherit;font-size:13px;font-weight:700;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .subscription-title:hover,.subscription-title:focus-visible{color:var(--blue);text-decoration:underline}
-.bulk-server-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;padding:4px 10px;border-top:1px solid var(--border);background:var(--panel)}
-#bulkServerCount{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums;margin-right:6px}
-.bulk-server-actions .tool-button{min-height:32px;font-size:13px}
-#deleteSelectedButton{color:var(--red)}
 #serverRows tr{user-select:none}
 #serverRows input{user-select:text}
 .subscription-filter{align-self:flex-start;max-width:calc(100% - 16px);min-height:28px;margin:8px 8px 0;gap:6px}

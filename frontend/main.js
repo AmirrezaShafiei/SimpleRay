@@ -503,7 +503,6 @@ async function pingServers(servers,samples){
   const notice = $('runtimeNotice');
   const job = {cancelled: false};
   pingJob = job;
-  $('pingSelectedButton').disabled = true;
   button.setAttribute('aria-busy', 'true');
   button.innerHTML = `${icon('close')} <span>Cancel ping</span>`;
   notice.textContent = `Pinging 0/${servers.length}`;
@@ -584,11 +583,6 @@ function orderedRows(){
 function selectedServers() {
   return state.servers.filter(server => selectedServerIds.has(server.id));
 }
-function renderBulkSelection() {
-  $('bulkServerActions').hidden = selectedServerIds.size === 0;
-  $('bulkServerCount').textContent = `${selectedServerIds.size} selected`;
-  $('pingSelectedButton').disabled = Boolean(pingJob);
-}
 function renderRowSelection(row) {
   const id = row.dataset.id;
   const selected = selectedServerIds.has(id);
@@ -598,7 +592,6 @@ function renderRowSelection(row) {
 }
 function renderServerSelection() {
   for (const row of $('serverRows').rows) renderRowSelection(row);
-  renderBulkSelection();
 }
 function selectServerRow(id, rows, {ctrlKey = false, shiftKey = false} = {}) {
   if (!ctrlKey) selectedServerIds.clear();
@@ -665,6 +658,11 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
     tr.addEventListener('contextmenu',e=>{e.preventDefault();showContextMenu(s.id,e.clientX,e.clientY)});
     tr.addEventListener('keydown', e => {
       if (e.target !== tr) return;
+      if (e.key === 'Escape' && $('contextMenu').hidden) {
+        selectedServerIds.clear();
+        selectionAnchorId = null;
+        renderServerSelection();
+      }
       if (e.key === ' ') {
         e.preventDefault();
         if (!e.repeat) selectServerRow(s.id, rows, e);
@@ -693,7 +691,6 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
     ? 'No servers in this subscription match the current search.'
     : 'No configurations found. Use Paste or its menu to add servers.';
   renderSort();
-  renderBulkSelection();
   renderConnection();
 }
 function startInlineRename(server, wrap, name, button){
@@ -1048,14 +1045,6 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
     }
   }, SUBSCRIPTION_CHECK_INTERVAL);
   $('updateButton').addEventListener('click',()=>void updateAll());
-  $('clearServerSelection').addEventListener('click', () => {
-    selectedServerIds.clear();
-    selectionAnchorId = null;
-    renderServerSelection();
-    (serverRow(state.selected) ?? $('serverRows').rows[0] ?? $('searchInput')).focus();
-  });
-  $('pingSelectedButton').addEventListener('click',()=>void pingServers(selectedServers(),state.pingSamples));
-  $('deleteSelectedButton').addEventListener('click',()=>void removeServers(selectedServers()));
   $('pingAllButton').addEventListener('click',()=>{
     if(pingJob)void cancelPing();
     else void pingServers(state.servers,state.pingSamples);

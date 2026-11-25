@@ -1,6 +1,6 @@
 {
   "name": "simpleray",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "type": "module",
   "description": "Minimal Windows Xray client \u2014 Beta candidate phases 5 and 6",

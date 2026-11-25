@@ -7,7 +7,7 @@ Download the Windows x64 installer and its SHA-256 checksum from the [latest sta
 ## Features in source
 - Clipboard import of VMess, VLESS, Trojan, Shadowsocks, WireGuard, Hysteria2, SOCKS5, and HTTP(S) proxy links. WireGuard configuration text and named HTTP(S) subscriptions are supported.
 - Click any table header to sort. Up to three pinned servers stay at the top. Flags come from the country code, name, or flag in the profile label.
-- Ctrl-click to toggle individual servers or Shift-click to select a range in the displayed order. Use the selection to ping or delete multiple servers. A manual subscription update restores deleted servers that are still in the feed.
+- Ctrl-click to toggle individual servers or Shift-click to select a range in the displayed order. Right-click a selected row to ping or delete the selection. A manual subscription update restores deleted servers that are still in the feed.
 - Context-menu Ping and Ping All offer 1, 2 or 3 HTTP-through-proxy probes, with two by default for new settings. Ping All checks up to four servers at a time and finishes the initial pass before starting the final probe. Multi-probe requests show the first result and then the average of successful probes.
 - One switch for real connect/disconnect using official Xray-core and Windows System Proxy. The connected panel shows live rates and the total bytes of the current session.
 - **Test download** under the live rates measures the active tunnel with a transfer of up to 3 MB. Click the result to run the test again.
