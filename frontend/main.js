@@ -20,6 +20,7 @@ let lastSwitchConfig;
 let configUpdate=Promise.resolve();
 const SUBSCRIPTION_CHECK_INTERVAL = 60_000;
 const state={servers:[],selected:null,sortKey:null,sortDirection:'asc',query:'',...restoreAppearance(pref),pingSamples:[1,2,3].includes(pref.pingSamples)?pref.pingSamples:DEFAULT_PING_SAMPLES,contextId:null,editingId:null,editingSubscriptionId:null,subscriptionFilterId:null,pendingSubscriptionUrls:[],updating:false,connection:{state:'disconnected',serverId:null,systemProxy:false,downloadBps:0,uploadBps:0,trafficAvailable:false},connectionBusy:false};
+const checkedServerIds = new Set();
 // Native desktop preferences belong to Rust so close-to-tray also works
 // when the WebView is hidden. Browser-only preview keeps these disabled.
 const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false};
@@ -125,6 +126,10 @@ function sync(){
   const db=repo.snapshot();
   state.servers=repo.rows();
   state.selected=db.selectedId;
+  const serverIds = new Set(state.servers.map(server => server.id));
+  for (const id of checkedServerIds) {
+    if (!serverIds.has(id)) checkedServerIds.delete(id);
+  }
   renderSubscriptionFilter(db.subscriptions);
   render();
   renderSubscriptionList(db.subscriptions);
@@ -497,6 +502,7 @@ async function pingServers(servers,samples){
   const notice = $('runtimeNotice');
   const job = {cancelled: false};
   pingJob = job;
+  $('pingSelectedButton').disabled = true;
   button.setAttribute('aria-busy', 'true');
   button.innerHTML = `${icon('close')} <span>Cancel ping</span>`;
   notice.textContent = `Pinging 0/${servers.length}`;
@@ -574,7 +580,42 @@ function orderedRows(){
     : state.servers;
   return sortServers(filterServers(servers, state.query).map(latencyView), state.sortKey, state.sortDirection);
 }
+function checkedServers() {
+  return state.servers.filter(server => checkedServerIds.has(server.id));
+}
+function renderBulkSelection() {
+  const boxes = [...$('serverRows').querySelectorAll('.server-checkbox')];
+  const checked = boxes.filter(box => box.checked).length;
+  const selectVisible = $('selectVisibleServers');
+  selectVisible.disabled = boxes.length === 0;
+  selectVisible.checked = checked > 0 && checked === boxes.length;
+  selectVisible.indeterminate = checked > 0 && checked < boxes.length;
+  $('bulkServerActions').hidden = checkedServerIds.size === 0;
+  $('bulkServerCount').textContent = `${checkedServerIds.size} selected`;
+  $('pingSelectedButton').disabled = Boolean(pingJob);
+}
+function checkServer(box, checked) {
+  const row = box.closest('tr');
+  if (checked) checkedServerIds.add(row.dataset.id);
+  else checkedServerIds.delete(row.dataset.id);
+  box.checked = checked;
+  row.classList.toggle('bulk-selected', checked);
+}
 function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('serverRows');const focused=body.contains(document.activeElement)?document.activeElement:null;const focusedId=focused?.closest('tr')?.dataset.id;body.replaceChildren();for(const s of rows){const tr=document.createElement('tr');tr.dataset.id=s.id;tr.classList.toggle('selected',s.id===state.selected);tr.tabIndex=0;tr.setAttribute('aria-selected',String(s.id===state.selected));
+    const selectCell = tr.insertCell();
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'server-checkbox';
+    checkbox.checked = checkedServerIds.has(s.id);
+    checkbox.setAttribute('aria-label', `Select ${displayServerName(s)} for bulk actions`);
+    tr.classList.toggle('bulk-selected', checkbox.checked);
+    checkbox.addEventListener('click', event => event.stopPropagation());
+    checkbox.addEventListener('dblclick', event => event.stopPropagation());
+    checkbox.addEventListener('change', () => {
+      checkServer(checkbox, checkbox.checked);
+      renderBulkSelection();
+    });
+    selectCell.append(checkbox);
     const starCell=tr.insertCell();
     const actions=document.createElement('div');actions.className='row-actions';
     const star=document.createElement('button');star.type='button';star.className='star'+(s.favorite?' is-favorite':'');star.innerHTML=icon('star');star.title=s.favorite?'Remove favorite':'Add favorite';star.setAttribute('aria-label',`${s.favorite?'Unstar':'Star'} ${s.name}`);
@@ -612,15 +653,20 @@ function renderTable(){if(editNameId)return;const rows=orderedRows(),body=$('ser
     }
     const sourceCell=tr.insertCell();sourceCell.className='source-cell';sourceCell.textContent=s.source;
     tr.addEventListener('click',()=>setSelected(s.id));tr.addEventListener('dblclick',()=>{setSelected(s.id);void connectSelected(s.id)});
-    tr.addEventListener('contextmenu',e=>{e.preventDefault();setSelected(s.id);showContextMenu(s.id,e.clientX,e.clientY)});
-    tr.addEventListener('keydown',e=>{if(e.target!==tr)return;if(e.key==='Enter'){e.preventDefault();setSelected(s.id);void connectSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();setSelected(s.id);const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
-  if(focusedId){const row=serverRow(focusedId);const control=focused.matches('.star')?row?.querySelector('.star'):focused.matches('.pin-button')?row?.querySelector('.pin-button'):row;control?.focus({preventScroll:true})}
+    tr.addEventListener('contextmenu',e=>{e.preventDefault();showContextMenu(s.id,e.clientX,e.clientY)});
+    tr.addEventListener('keydown',e=>{if(e.target!==tr)return;if(e.key==='Enter'){e.preventDefault();setSelected(s.id);void connectSelected(s.id)}if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')){e.preventDefault();const rect=tr.getBoundingClientRect();showContextMenu(s.id,rect.left+150,rect.top+30)}});body.append(tr)}
+  if (focusedId) {
+    const row = serverRow(focusedId);
+    const selector = ['.server-checkbox', '.star', '.pin-button'].find(value => focused.matches(value));
+    (selector ? row?.querySelector(selector) : row)?.focus({preventScroll:true});
+  }
   const empty = $('emptyMessage');
   empty.hidden = rows.length !== 0;
   empty.textContent = state.subscriptionFilterId
     ? 'No servers in this subscription match the current search.'
     : 'No configurations found. Use Paste or its menu to add servers.';
   renderSort();
+  renderBulkSelection();
   renderConnection();
 }
 function startInlineRename(server, wrap, name, button){
@@ -659,11 +705,65 @@ function toggleFavorite(id){if(safeAction(()=>repo.toggleFavorite(id)))sync()}
 function togglePin(id){if(safeAction(()=>repo.togglePin(id)))sync()}
 function closeContextMenu(){$('contextMenu').hidden=true;state.contextId=null}
 function addMenuButton(parent,iconName,label,action,{disabled=false,danger=false}={}){const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.className='menu-button'+(danger?' menu-danger':'');button.disabled=disabled;const iconSpan=document.createElement('span');iconSpan.className='menu-icon';iconSpan.innerHTML=icon(iconName);const txt=document.createElement('span');txt.textContent=label;button.append(iconSpan,txt);if(!disabled)button.addEventListener('click',()=>{closeContextMenu();action()});parent.append(button);return button}
-function showContextMenu(id,x,y){const s=state.servers.find(s=>s.id===id);if(!s)return;state.contextId=id;const menu=$('contextMenu');menu.replaceChildren();addMenuButton(menu,'play','Connect / Select',()=>{setSelected(id);void connectSelected(id)});for(const samples of [1,2,3])addMenuButton(menu,'activity',`Ping (×${samples})${samples>1?' — Average':''}`,()=>void pingServers([s],samples));const div=document.createElement('div');div.className='menu-divider';menu.append(div);addMenuButton(menu,'star',s.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));addMenuButton(menu,'pin',s.pinned?'Unpin server':'Pin server',()=>togglePin(id));addMenuButton(menu,'edit',s.subscriptionId?'Edit (subscription-managed)':'Edit',()=>openManualDialog(id),{disabled:Boolean(s.subscriptionId)});addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});addMenuButton(menu,'delete','Delete',()=>removeServer(id),{danger:true});if(s.subscriptionId){const note=document.createElement('div');note.className='menu-note';note.textContent='Deleting this subscription node hides it from future refreshes';menu.append(note)}menu.hidden=false;menu.style.left='0px';menu.style.top='0px';const bounds=menu.getBoundingClientRect();menu.style.left=`${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;menu.style.top=`${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`}
+function showContextMenu(id,x,y) {
+  const server = state.servers.find(item => item.id === id);
+  if (!server) return;
+  const group = checkedServerIds.has(id) && checkedServerIds.size > 1;
+  const targets = group ? checkedServers() : [server];
+  state.contextId = id;
+  const menu = $('contextMenu');
+  menu.replaceChildren();
+  if (!group) {
+    setSelected(id);
+    addMenuButton(menu,'play','Connect / Select',()=>void connectSelected(id));
+  }
+  for (const samples of [1,2,3]) {
+    const label = group ? `Ping ${targets.length} selected` : 'Ping';
+    addMenuButton(menu,'activity',`${label} (×${samples})${samples>1?' — Average':''}`,
+      ()=>void pingServers(targets,samples), {disabled:Boolean(pingJob)});
+  }
+  const divider = document.createElement('div');
+  divider.className = 'menu-divider';
+  menu.append(divider);
+  if (!group) {
+    addMenuButton(menu,'star',server.favorite?'Remove Favorite':'Set as Favorite',()=>toggleFavorite(id));
+    addMenuButton(menu,'pin',server.pinned?'Unpin server':'Pin server',()=>togglePin(id));
+    addMenuButton(menu,'edit',server.subscriptionId?'Edit (subscription-managed)':'Edit',
+      ()=>openManualDialog(id), {disabled:Boolean(server.subscriptionId)});
+    addMenuButton(menu,'copy','Duplicate as manual',()=>{if(safeAction(()=>repo.duplicateManual(id)))sync()});
+  }
+  addMenuButton(menu,'delete',group?`Delete ${targets.length} selected`:'Delete',
+    ()=>void removeServers(targets), {danger:true});
+  menu.hidden = false;
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const bounds = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8,Math.min(x,window.innerWidth-bounds.width-8))}px`;
+  menu.style.top = `${Math.max(8,Math.min(y,window.innerHeight-bounds.height-8))}px`;
+}
 function closePasteMenu(){$('pasteMenu').hidden=true;$('pasteMenuButton').setAttribute('aria-expanded','false')}
 function showDialog(id){const target=$(id);for(const dialog of document.querySelectorAll('dialog[open]')){if(dialog!==target)dialog.close()}if(!target.open)target.showModal()}
 function confirmAction(title,description,acceptLabel='Delete',keepLabel=null){return new Promise(resolve=>{const dialog=$('confirmDialog');$('confirmTitle').textContent=title;$('confirmDescription').textContent=description;$('confirmAccept').textContent=acceptLabel;$('confirmKeep').hidden=!keepLabel;if(keepLabel)$('confirmKeep').textContent=keepLabel;let done=false;const finish=result=>{if(done)return;done=true;dialog.close();dialog.removeEventListener('close',cancel);$('confirmCancel').removeEventListener('click',onCancel);$('confirmClose').removeEventListener('click',onCancel);$('confirmAccept').removeEventListener('click',onYes);$('confirmKeep').removeEventListener('click',onKeep);resolve(result)};const cancel=()=>finish(false),onCancel=()=>finish(false),onYes=()=>finish(true),onKeep=()=>finish('keep');dialog.addEventListener('close',cancel);$('confirmCancel').addEventListener('click',onCancel);$('confirmClose').addEventListener('click',onCancel);$('confirmAccept').addEventListener('click',onYes);$('confirmKeep').addEventListener('click',onKeep);showDialog('confirmDialog')})}
-async function removeServer(id){const s=state.servers.find(x=>x.id===id);if(!s)return;const answer=await confirmAction('Delete configuration?',s.subscriptionId?'This node will be hidden on future subscription updates.':'This manual configuration will be removed from local storage.');if(!answer)return;if(state.connection.state==='connected'&&state.connection.serverId===id){await disconnectConnection();if(state.connection.state==='connected')return}if(safeAction(()=>repo.deleteServer(id)))sync()}
+async function removeServers(servers) {
+  if (!servers.length || $('confirmDialog').open) return;
+  const group = servers.length > 1;
+  const title = group ? `Delete ${servers.length} configurations?` : 'Delete configuration?';
+  const description = servers.some(server => server.subscriptionId)
+    ? 'Updating the subscription manually brings back deleted servers that are still in its feed.'
+    : 'The selected configurations will be removed from local storage.';
+  if (!await confirmAction(title, description)) return;
+  if (state.connectionBusy) {
+    toast('Wait for the connection change to finish, then try again.');
+    return;
+  }
+  const ids = new Set(servers.map(server => server.id));
+  if (ids.has(state.connection.serverId)) {
+    await disconnectConnection();
+    if (ids.has(state.connection.serverId)) return;
+  }
+  const currentIds = state.servers.filter(server => ids.has(server.id)).map(server => server.id);
+  if (currentIds.length && safeAction(()=>repo.deleteServers(currentIds))) sync();
+}
 function openManualDialog(id=null){closePasteMenu();$('manualError').textContent='';state.editingId=id;const s=state.servers.find(x=>x.id===id);$('manualDialogTitle').textContent=s?'Edit configuration':'Add server';$('manualUri').value=s?.uri||'';$('manualName').value=s?.name||'';showDialog('manualDialog');$('manualUri').focus()}
 function openSubscriptionDialog(url='', subscription=null){
   closePasteMenu();
@@ -779,16 +879,19 @@ async function updateSubscriptions(subscriptions, {quiet=false, summary=false}={
   state.updating = true;
   renderSubscriptionList();
   let succeeded = 0;
+  let restored = 0;
   try {
     for (const sub of subscriptions) {
       if (!quiet) toast(`Updating “${sub.name}”…`);
       try {
         const response = await fetchSubscription(sub.url);
-        const stats = repo.refreshSubscription(sub.id, response);
+        const stats = repo.refreshSubscription(sub.id, response, undefined, {restoreDeleted:!quiet});
         succeeded++;
+        restored += stats.restored;
         if (!quiet) {
           const skipped = stats.invalid ? `, ${stats.invalid} skipped` : '';
-          toast(`Updated “${sub.name}”: ${stats.added} added, ${stats.retained} retained, ${stats.removed} removed${skipped}`);
+          const restoredLabel = stats.restored ? ` (${stats.restored} restored)` : '';
+          toast(`Updated “${sub.name}”: ${stats.added} added${restoredLabel}, ${stats.retained} retained, ${stats.removed} removed${skipped}`);
         }
       } catch (error) {
         const reason = errorMessage(error);
@@ -805,7 +908,10 @@ async function updateSubscriptions(subscriptions, {quiet=false, summary=false}={
     state.updating = false;
     sync();
   }
-  if (summary) toast(`Subscription update complete: ${succeeded}/${subscriptions.length} succeeded`);
+  if (summary) {
+    const restoredLabel = restored ? ` · ${restored} restored` : '';
+    toast(`Subscription update complete: ${succeeded}/${subscriptions.length} succeeded${restoredLabel}`);
+  }
 }
 async function updateAll(){
   const {subscriptions} = repo.snapshot();
@@ -915,6 +1021,19 @@ function init(){if(nativeHost())document.documentElement.classList.add('native-h
     }
   }, SUBSCRIPTION_CHECK_INTERVAL);
   $('updateButton').addEventListener('click',()=>void updateAll());
+  $('selectVisibleServers').addEventListener('change', event => {
+    for (const box of $('serverRows').querySelectorAll('.server-checkbox')) {
+      checkServer(box, event.target.checked);
+    }
+    renderBulkSelection();
+  });
+  $('clearServerSelection').addEventListener('click', () => {
+    checkedServerIds.clear();
+    render();
+    $('selectVisibleServers').focus();
+  });
+  $('pingSelectedButton').addEventListener('click',()=>void pingServers(checkedServers(),state.pingSamples));
+  $('deleteSelectedButton').addEventListener('click',()=>void removeServers(checkedServers()));
   $('pingAllButton').addEventListener('click',()=>{
     if(pingJob)void cancelPing();
     else void pingServers(state.servers,state.pingSamples);

@@ -29,11 +29,34 @@ test('failed or empty subscription update leaves last-good nodes',()=>{
  assert.equal(a.rows().length,1);
  a.setSubscriptionError(sub.id,'Network timeout');assert.equal(a.snapshot().subscriptions[0].lastError,'Network timeout');
 });
-test('deleting subscription nodes persists as hidden across updates',()=>{
- const a=repository(),sub=a.addSubscription('Daily','https://example.com/sub');
- a.refreshSubscription(sub.id,[line('a.test'),line('b.test')].join('\n'));
- const id=a.rows()[0].id;a.deleteServer(id);a.refreshSubscription(sub.id,[line('a.test'),line('b.test')].join('\n'));
- assert.equal(a.rows().length,1);assert.notEqual(a.rows()[0].id,id);
+test('manual update restores previously deleted subscription nodes after restart',()=>{
+ const storage=memory(),a=repository(storage);
+ const sub=a.addSubscription('Daily','https://example.com/sub');
+ const other=a.addSubscription('Other','https://example.com/other');
+ const payload=[line('a.test'),line('b.test')].join('\n');
+ a.refreshSubscription(sub.id,payload);
+ a.refreshSubscription(other.id,line('other.test'));
+ a.importManual(line('manual.test'));
+ const [first,second,otherServer,manual]=a.rows();
+ a.toggleFavorite(second.id);
+ a.setSelected(first.id);
+ assert.throws(()=>a.deleteServers([first.id,'missing']), /Server not found/);
+ assert.equal(a.snapshot().selectedId,first.id);
+ a.deleteServers([first.id,otherServer.id,manual.id]);
+ assert.equal(a.snapshot().selectedId,second.id);
+
+ const reloaded=repository(storage);
+ reloaded.refreshSubscription(sub.id,payload);
+ assert.deepEqual(reloaded.rows().map(server=>server.id),[second.id]);
+ assert.throws(()=>reloaded.refreshSubscription(sub.id,'unusable',undefined,{restoreDeleted:true}));
+ assert.equal(reloaded.snapshot().subscriptions[0].hiddenSignatures.length,1);
+ const result=reloaded.refreshSubscription(sub.id,payload,undefined,{restoreDeleted:true});
+ assert.equal(result.restored,1);
+ assert.equal(reloaded.rows().find(server=>server.id===second.id).favorite,true);
+ assert.deepEqual(reloaded.rows().map(server=>server.host).sort(),['a.test','b.test']);
+ reloaded.refreshSubscription(other.id,line('other.test'));
+ assert.equal(reloaded.rows().length,2);
+ assert.equal(reloaded.snapshot().subscriptions[0].hiddenSignatures.length,0);
 });
 test('duplicate subscription item becomes standalone editable item',()=>{
  const a=repository(),sub=a.addSubscription('Daily','https://example.com/sub');a.refreshSubscription(sub.id,line('a.test'));

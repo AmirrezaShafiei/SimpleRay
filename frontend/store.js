@@ -59,6 +59,24 @@ export function createRepository(storage,{idFactory=id}={}){
       if(!next.selectedId)next.selectedId=next.servers.at(-1).id;
     });
   };
+  const deleteServers = serverIds => transact(next => {
+    const ids = new Set(serverIds);
+    const removed = next.servers.filter(server => ids.has(server.id));
+    if (removed.length !== ids.size) throw new Error('Server not found');
+    const subscriptions = new Map(next.subscriptions.map(sub => [sub.id, sub]));
+    const hiddenBySubscription = new Map();
+    for (const server of removed) {
+      const sub = subscriptions.get(server.subscriptionId);
+      if (!sub) continue;
+      if (!hiddenBySubscription.has(sub)) {
+        hiddenBySubscription.set(sub, new Set(sub.hiddenSignatures));
+      }
+      hiddenBySubscription.get(sub).add(server.signature);
+    }
+    for (const [sub, signatures] of hiddenBySubscription) sub.hiddenSignatures = [...signatures];
+    next.servers = next.servers.filter(server => !ids.has(server.id));
+    if (ids.has(next.selectedId)) next.selectedId = next.servers[0]?.id ?? null;
+  });
   return {
     get loadError(){return loadError},
     snapshot,rows,
@@ -144,17 +162,7 @@ export function createRepository(storage,{idFactory=id}={}){
         next.servers.push(duplicate);next.selectedId=duplicate.id;
       });
     },
-    deleteServer(serverId){
-      return transact(next=>{
-        const found=next.servers.find(x=>x.id===serverId);if(!found)throw new Error('Server not found');
-        if(found.subscriptionId){
-          const sub=next.subscriptions.find(s=>s.id===found.subscriptionId);
-          if(sub&&!sub.hiddenSignatures.includes(found.signature))sub.hiddenSignatures.push(found.signature);
-        }
-        next.servers=next.servers.filter(x=>x.id!==serverId);
-        if(next.selectedId===serverId)next.selectedId=next.servers[0]?.id??null;
-      });
-    },
+    deleteServers,
     addSubscription(name,url,autoRefreshHours=0){
       const cleanedName=sanitizedName(name,'');const cleanedUrl=validateSubscriptionUrl(url);
       validateRefreshHours(autoRefreshHours);
@@ -203,16 +211,22 @@ export function createRepository(storage,{idFactory=id}={}){
         subscription.lastAttemptAt=attemptedAt;
       });
     },
-    refreshSubscription(subscriptionId,payload,updatedAt=new Date().toISOString()){
-      const parsed=parseSubscriptionPayload(payload);let added=0,removed=0,retained=0;
+    refreshSubscription(subscriptionId,payload,updatedAt=new Date().toISOString(),{restoreDeleted=false}={}){
+      const parsed=parseSubscriptionPayload(payload);let added=0,removed=0,retained=0,restored=0;
       transact(next=>{
         const subscription=next.subscriptions.find(s=>s.id===subscriptionId);
         if(!subscription)throw new Error('Subscription not found');
         const previous=next.servers.filter(s=>s.subscriptionId===subscriptionId);
         const existing=new Map(previous.map(s=>[s.signature,s]));
         const imported=new Map();
+        const hidden = new Set(subscription.hiddenSignatures);
         for(const data of parsed.servers){
-          if(subscription.hiddenSignatures.includes(data.signature)||imported.has(data.signature))continue;
+          if (imported.has(data.signature)) continue;
+          if (hidden.has(data.signature)) {
+            if (!restoreDeleted) continue;
+            hidden.delete(data.signature);
+            restored++;
+          }
           const old=existing.get(data.signature);
           const server={...data,id:old?.id||idFactory(),subscriptionId,favorite:old?.favorite||false,pinned:old?.pinned||false,latency:old?.latency??null,latencyStatus:old?.latencyStatus||'unknown',latencySuccess:old?.latencySuccess||0,latencyAttempted:old?.latencyAttempted||0};
           if(old?.localName){
@@ -224,10 +238,11 @@ export function createRepository(storage,{idFactory=id}={}){
         }
         removed=previous.filter(s=>!imported.has(s.signature)).length;
         next.servers=next.servers.filter(s=>s.subscriptionId!==subscriptionId).concat([...imported.values()]);
+        if (restored) subscription.hiddenSignatures = [...hidden];
         subscription.updatedAt=updatedAt;subscription.lastAttemptAt=updatedAt;subscription.lastError=null;
         if(!next.servers.some(s=>s.id===next.selectedId))next.selectedId=next.servers[0]?.id??null;
       });
-      return {added,removed,retained,invalid:parsed.errors.length};
+      return {added,removed,retained,restored,invalid:parsed.errors.length};
     },
     deleteSubscription(subscriptionId,{keepNodes=false}={}){
       return transact(next=>{

@@ -13,7 +13,7 @@ test('single-window screenshot-inspired layout contains no sidebar or remarks',(
 });
 test('Ping button appears directly after Update',()=>{
   assert.ok(html.indexOf('id="updateButton"') < html.indexOf('id="pingAllButton"'));
-  assert.doesNotMatch(html,/id="pingSelectedButton"/);
+  assert.match(html,/id="bulkServerActions"[^>]+hidden>[\s\S]*?id="pingSelectedButton"[\s\S]*?id="deleteSelectedButton"/);
 });
 test('all five sortable headers exist',()=>{
   for(const col of ['favorite','name','type','latency','source'])assert.match(html,new RegExp('data-sort="'+col+'"'));
