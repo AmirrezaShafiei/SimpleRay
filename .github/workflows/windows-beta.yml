@@ -228,7 +228,7 @@ jobs:
           $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksumFile = Join-Path $installer.DirectoryName 'SHA256SUMS.txt'
           "$checksum  $($installer.Name)" | Set-Content -Path $checksumFile -Encoding ascii
-          $notes = 'Right-click a selected server to ping or delete the selection. The duplicate toolbar below the table has been removed. Includes the Windows x64 installer and its SHA-256 checksum.'
+          $notes = 'Right-click a selected server to ping or delete the selection. The duplicate toolbar below the table has been removed, and the download test label aligns with the live rate. Includes the Windows x64 installer and its SHA-256 checksum.'
           $draft = gh release view $version --json isDraft --jq .isDraft 2>$null
           if ($LASTEXITCODE -eq 0) {
             if ($draft -ne 'true') { throw 'The stable release is already published' }
