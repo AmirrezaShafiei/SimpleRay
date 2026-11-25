@@ -228,8 +228,8 @@ function renderConnection(){
   speedButton.disabled=!nativeHost()||state.connectionBusy!==false||health?.switching===true||
     !Number.isInteger(c.connectionGeneration)||testing;
   speedButton.setAttribute('aria-busy',String(testing));
-  speedButton.title=downloadTest?.error??(downloadTest?.rate?'Test download again (up to 10 MB)':
-    'Measure download speed through the active tunnel (up to 10 MB)');
+  speedButton.title=downloadTest?.error??(downloadTest?.rate?'Test download again (up to 3 MB)':
+    'Measure download speed through the active tunnel (up to 3 MB)');
   const speedLabel=$('downloadTestLabel');
   const speedText=testing?'Testing…':downloadTest?.error?'Test failed':downloadTest?.rate??'Test download';
   if(speedLabel.textContent!==speedText)speedLabel.textContent=speedText;
@@ -526,7 +526,7 @@ async function pingServers(servers,samples){
       }
       render();
     };
-    const options = {concurrency: 3, shouldStop: () => job.cancelled};
+    const options = {shouldStop: () => job.cancelled};
     let summary;
     if (samples > 1) {
       summary = await pingWithFallback(servers, samples, runOne, onResult, {

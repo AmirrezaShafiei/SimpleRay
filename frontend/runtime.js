@@ -95,7 +95,7 @@ function combinedPing({result: first, raw}, last, lastRaw) {
   });
 }
 
-export async function pingPool(servers,samples,runOne,onProgress,{concurrency=3,shouldStop=()=>false}={}){
+export async function pingPool(servers,samples,runOne,onProgress,{concurrency=4,shouldStop=()=>false}={}){
   if(![1,2,3].includes(samples))throw new Error('Ping count must be 1, 2 or 3');
   const list=[...servers];let next=0,finished=0;
   const workers=Array.from({length:Math.min(concurrency,list.length)},async()=>{

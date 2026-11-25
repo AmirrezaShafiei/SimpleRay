@@ -17,6 +17,7 @@
     <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="icon-up" viewBox="0 0 24 24"><path d="M12 19V5m-5 5 5-5 5 5"/></symbol>
     <symbol id="icon-down" viewBox="0 0 24 24"><path d="M12 5v14m-5-5 5 5 5-5"/></symbol>
+    <symbol id="icon-speedometer" viewBox="0 0 24 24"><path d="M3.8 18a9 9 0 1 1 16.4 0M12 15l4-4"/></symbol>
     <symbol id="icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></symbol>
     <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5m5 0a8 8 0 1 0-2 5.3"/></symbol>
     <symbol id="icon-clipboard" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M8 12h8m-8 4h6"/></symbol>
@@ -56,8 +57,8 @@
         <div class="traffic" id="traffic" aria-label="Connection traffic" hidden>
           <span class="rate"><svg class="ui-icon down" aria-hidden="true"><use href="#icon-down"/></svg><span class="rate-values"><span id="downRate">0 KB/s</span><small id="downTotal" title="Downloaded in this session">0 B total</small></span></span>
           <span class="rate"><svg class="ui-icon up" aria-hidden="true"><use href="#icon-up"/></svg><span class="rate-values"><span id="upRate">0 KB/s</span><small id="upTotal" title="Uploaded in this session">0 B total</small></span></span>
-          <button type="button" class="download-test" id="downloadTest" title="Measure download speed through the active tunnel (up to 10 MB)">
-            <svg class="ui-icon" aria-hidden="true"><use href="#icon-down"/></svg>
+          <button type="button" class="download-test" id="downloadTest" title="Measure download speed through the active tunnel (up to 3 MB)">
+            <svg class="ui-icon" aria-hidden="true"><use href="#icon-speedometer"/></svg>
             <span id="downloadTestLabel" aria-live="polite">Test download</span>
           </button>
         </div>

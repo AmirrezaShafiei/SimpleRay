@@ -17,14 +17,14 @@ test('three real delay sample average and partial success metadata',()=>{
     latency:null,latencyStatus:'timeout',latencySuccess:0,latencyAttempted:3
   });
 });
-test('Ping all caps parallelism at three and saves completion per node',async()=>{
+test('Ping All runs up to four servers simultaneously and reports each result',async()=>{
   const servers=Array.from({length:8},(_,i)=>({id:`s${i}`}));let concurrent=0,maxConcurrent=0;const seen=[];
   const summary=await pingPool(servers,3,async()=>{
     concurrent++;maxConcurrent=Math.max(concurrent,maxConcurrent);
     await new Promise(resolve=>setTimeout(resolve,8));concurrent--;
     return {averageMs:87,successful:3,attempted:3};
-  },(server,result,done,total)=>seen.push({id:server.id,result,done,total}),{concurrency:3});
-  assert.equal(summary.finished,8);assert.equal(seen.length,8);assert.equal(maxConcurrent,3);
+  },(server,result,done,total)=>seen.push({id:server.id,result,done,total}));
+  assert.equal(summary.finished,8);assert.equal(seen.length,8);assert.equal(maxConcurrent,4);
   assert.deepEqual(seen.at(-1).result,{latency:87,latencyStatus:'ok',latencySuccess:3,latencyAttempted:3});
 });
 test('failed proxy probes and missing averages never appear as a measured zero',()=>{

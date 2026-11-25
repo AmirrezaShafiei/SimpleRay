@@ -15,8 +15,8 @@ use crate::switching::{self, HealthStatus, Monitor, Profile, SwitchDecision, Swi
 
 const PROBE_URL:&str="https://www.gstatic.com/generate_204";
 const TRACE_URL:&str="https://www.cloudflare.com/cdn-cgi/trace";
-const DOWNLOAD_TEST_URL: &str = "https://speed.cloudflare.com/__down?bytes=10000000";
-const DOWNLOAD_TEST_LIMIT: usize = 10_000_000;
+const DOWNLOAD_TEST_URL: &str = "https://speed.cloudflare.com/__down";
+const DOWNLOAD_TEST_LIMIT: usize = 3_000_000;
 const DOWNLOAD_TEST_WINDOW: Duration = Duration::from_secs(5);
 const MIN_DOWNLOAD_SAMPLE: usize = 16 * 1024;
 const RETRY_INTERVAL:Duration=Duration::from_secs(3);
@@ -290,6 +290,7 @@ fn probe_client(port: u16, request_timeout: Duration) -> Result<reqwest::Client,
 async fn download_speed(port: u16) -> Result<f64, String> {
     let client = probe_client(port, Duration::from_secs(12))?;
     let request = client.get(DOWNLOAD_TEST_URL)
+        .query(&[("bytes", DOWNLOAD_TEST_LIMIT)])
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .header(reqwest::header::CACHE_CONTROL, "no-cache");
     let mut response = timeout(Duration::from_secs(6), request.send()).await
