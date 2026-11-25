@@ -86,12 +86,22 @@ jobs:
         run: npm run desktop:build -- -- --locked
       - name: Verify installation and application startup
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $setup = Get-ChildItem 'src-tauri/target/release/bundle/nsis/*.exe' -File | Select-Object -First 1
           if (!$setup) { throw 'Windows installer is missing' }
           $installDir = Join-Path $env:RUNNER_TEMP 'SimpleRay-smoke'
-          $installer = Start-Process -FilePath $setup.FullName -ArgumentList @('/S',"/D=$installDir") -PassThru -Wait
+          $initialSetup = $setup.FullName
+          if ($env:GITHUB_REF -eq 'refs/heads/build/simpleray-1.2.1') {
+            $initialSetup = Join-Path $env:RUNNER_TEMP 'SimpleRay_1.2.0_x64-setup.exe'
+            gh release download v1.2.0 --pattern 'SimpleRay_1.2.0_x64-setup.exe' --dir $env:RUNNER_TEMP
+            if ($LASTEXITCODE -ne 0) { throw 'Could not download the previous stable installer' }
+            $previousHash = (Get-FileHash -LiteralPath $initialSetup -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($previousHash -ne '40e0801d4d9852b2c26889f1378f81689c409ae256914a811c93e89d8a4f5006') { throw 'Previous installer SHA256 mismatch' }
+          }
+          $installer = Start-Process -FilePath $initialSetup -ArgumentList @('/S',"/D=$installDir") -PassThru -Wait
           if ($installer.ExitCode -ne 0) { throw "NSIS install failed: $($installer.ExitCode)" }
           foreach ($file in @('simpleray.exe','binaries/xray.exe','binaries/geoip.dat','binaries/geosite.dat','binaries/wintun.dll','licenses/XRAY-LICENSE.txt','licenses/WINTUN-LICENSE.txt')) {
             if (!(Test-Path (Join-Path $installDir $file) -PathType Leaf)) { throw "Installed resource missing: $file" }
@@ -197,7 +207,7 @@ jobs:
             $runKey.Dispose()
             $prefKey.Dispose()
           }
-      - name: Save the tested 1.2.1 installer as a draft release
+      - name: Publish the tested stable 1.2.1 installer
         if: github.ref == 'refs/heads/build/simpleray-1.2.1'
         shell: pwsh
         env:
@@ -214,13 +224,17 @@ jobs:
           $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksumFile = Join-Path $installer.DirectoryName 'SHA256SUMS.txt'
           "$checksum  $($installer.Name)" | Set-Content -Path $checksumFile -Encoding ascii
-          gh release view $version 2>$null
+          $notes = 'Manual subscription updates restore deleted servers that are still in the feed. Select multiple servers to ping or delete them together. Setup detects an active SimpleRay app and can close a leftover bundled Xray process before upgrading.'
+          $draft = gh release view $version --json isDraft --jq .isDraft 2>$null
           if ($LASTEXITCODE -eq 0) {
+            if ($draft -ne 'true') { throw 'The stable release is already published' }
             gh release upload $version $installer.FullName $checksumFile --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Could not attach the tested installer' }
+            gh release edit $version --draft=false --latest --target $env:GITHUB_SHA --title 'SimpleRAY 1.2.1 (Stable, Windows x64)' --notes $notes
           } else {
-            gh release create $version $installer.FullName $checksumFile --draft --target $env:GITHUB_SHA --title "SimpleRAY 1.2.1 (Windows x64)" --notes "Manual subscription updates restore deleted servers that are still in the feed. Select multiple servers to ping or delete them together. Setup detects an active SimpleRay app and can close a leftover bundled Xray process before upgrading."
+            gh release create $version $installer.FullName $checksumFile --latest --target $env:GITHUB_SHA --title 'SimpleRAY 1.2.1 (Stable, Windows x64)' --notes $notes
           }
-          if ($LASTEXITCODE -ne 0) { throw 'Could not attach the installer to the draft release' }
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the tested stable release' }
           Write-Host "$checksum  $($installer.Name)"
       - name: Publish beta pre-release after successful build and tests
         if: github.ref == 'refs/heads/main'

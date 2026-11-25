@@ -2,11 +2,12 @@
 
 Single-window, no-sidebar V2Ray/Xray client with three theme palettes, a Custom palette, and a separate Light/Dark/System setting, compact connect switch, named subscriptions, stars, real-delay Ping and System Proxy mode.
 
-Download the Windows x64 installer and its SHA-256 checksum from the [SimpleRAY 1.2 release](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v1.2.0).
+Download the Windows x64 installer and its SHA-256 checksum from the [latest stable release](https://github.com/AmirrezaShafiei/SimpleRay/releases/latest).
 
 ## Features in source
 - Clipboard import of VMess, VLESS, Trojan, Shadowsocks, WireGuard, Hysteria2, SOCKS5, and HTTP(S) proxy links. WireGuard configuration text and named HTTP(S) subscriptions are supported.
 - Click any table header to sort. Up to three pinned servers stay at the top. Flags come from the country code, name, or flag in the profile label.
+- Use the checkboxes to ping or delete multiple servers. A manual subscription update restores deleted servers that are still in the feed.
 - Context-menu Ping and Ping All offer 1, 2 or 3 HTTP-through-proxy probes, with two by default for new settings. Ping All checks up to four servers at a time and finishes the initial pass before starting the final probe. Multi-probe requests show the first result and then the average of successful probes.
 - One switch for real connect/disconnect using official Xray-core and Windows System Proxy. The connected panel shows live rates and the total bytes of the current session.
 - **Test download** under the live rates measures the active tunnel with a transfer of up to 3 MB. Click the result to run the test again.
