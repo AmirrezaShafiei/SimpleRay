@@ -119,39 +119,31 @@ await withWebView(['/tray-panel.html'],async({call,evaluate})=>{
   console.log('Installed Windows tray WebView: four rows, scrolling, compact footer, Open/Exit, recommendation, stable keyboard choice, marquee and shared theme passed');
 });
 
-// Accept the SOCKS5 handshake and keep the tunnel open without replying to TLS.
+// Accept the HTTP CONNECT handshake and keep the tunnel open without replying to TLS.
 // Both Xray probes are observable locally without using public test servers.
 async function stalledProxy(){
-  const reviews=[];
+  const probes=[];
   const sockets=new Set();
   const server=createServer(socket=>{
     sockets.add(socket);
     socket.on('close',()=>sockets.delete(socket));
     socket.on('error',()=>socket.destroy());
-    let authenticated=false;
-    let request=Buffer.alloc(0);
+    let request='';
     socket.on('data',function handshake(bytes){
-      request=Buffer.concat([request,bytes]);
-      if(!authenticated){
-        if(request.length<2||request.length<2+request[1])return;
-        request=request.subarray(2+request[1]);
-        authenticated=true;
-        socket.write(Buffer.from([5,0]));
-      }
-      if(request.length<5)return;
-      const size=request[3]===1?4:request[3]===4?16:request[4]+1;
-      if(request.length<6+size)return;
-      const host=request[3]===3?request.subarray(5,4+size).toString():null;
-      reviews.push({host,time:Date.now(),socket});
+      request+=bytes.toString('ascii');
+      if(!request.includes('\r\n\r\n'))return;
+      const host=/^CONNECT ([^ :]+):443 HTTP\/1\.[01]\r\n/.exec(request)?.[1];
+      if(!host){socket.destroy();return}
+      probes.push({host,time:Date.now(),socket});
       socket.removeListener('data',handshake);
       socket.resume();
-      socket.write(Buffer.from([5,0,0,1,127,0,0,1,0,0]));
+      socket.write('HTTP/1.1 200 Connection established\r\n\r\n');
     });
   });
   server.listen(0,'127.0.0.1');
   await once(server,'listening');
   return {
-    port:server.address().port,reviews,sockets,
+    port:server.address().port,probes,sockets,
     close(){for(const socket of sockets)socket.destroy();server.close()},
   };
 }
@@ -183,7 +175,7 @@ try{
         {id:'connection-test-a',name:'Connection test A',port:${first.port}},
         {id:'connection-test-b',name:'Connection test B',port:${second.port}},
       ].map(({id,name,port})=>({
-        ...parseShareLink('socks5://127.0.0.1:'+port),id,name,subscriptionId:null,
+        ...parseShareLink('http://smoke:test@127.0.0.1:'+port),id,name,subscriptionId:null,
       }));
       localStorage.setItem('simpleray.configurations.v2',JSON.stringify({
         version:2,servers,subscriptions:[],selectedId:servers[0].id,
@@ -220,8 +212,8 @@ try{
     assert.equal(connecting.disabled,false);
     assert.equal(connecting.thumbVisible,true);
     assert.equal(connecting.hatch,true);
-    const primary=await waitFor(()=>first.reviews.find(r=>r.host==='www.cloudflare.com'),'Primary connection probe did not start');
-    const backup=await waitFor(()=>first.reviews.find(r=>r.host==='www.gstatic.com'),'Backup connection probe did not start');
+    const primary=await waitFor(()=>first.probes.find(probe=>probe.host==='www.cloudflare.com'),'Primary connection probe did not start');
+    const backup=await waitFor(()=>first.probes.find(probe=>probe.host==='www.gstatic.com'),'Backup connection probe did not start');
     assert.ok(backup.time-primary.time>=1500,'The second endpoint started too early');
     assert.ok(first.sockets.has(primary.socket),'The first probe stopped when the second began');
     const afterClick=await evaluate(`(()=>{
@@ -246,7 +238,7 @@ try{
       const row=[...document.querySelectorAll('#serverRows tr')].find(item=>item.textContent.includes('Connection test B'));
       row.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));
     })()`);
-    const replacement=await waitFor(()=>second.reviews[0],'The selected replacement server did not start');
+    const replacement=await waitFor(()=>second.probes[0],'The selected replacement server did not start');
     assert.match((await state()).target,/Connection test B/);
     await waitFor(()=>first.sockets.size===0,'The superseded server is still probing');
     const timedOut=await waitFor(async()=>{
