@@ -188,6 +188,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .connection-panel.connecting .state-led{background:var(--yellow);box-shadow:0 0 12px #d9a54866;}
 .toggle:disabled{opacity:.64;cursor:not-allowed;}
 .toggle:disabled:hover{filter:none;}
+.connection-state{min-height:1lh;}
 .toggle[data-cancellable=true] .toggle-thumb::after {
   content: "";
   position: absolute;

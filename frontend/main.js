@@ -30,6 +30,7 @@ let connectionPoll;
 let connectionRevision=0;
 let lastConnectionRequest=0;
 let pendingConnection=null;
+let cancellingConnection=false;
 let activePing;
 let downloadTest;
 let editNameId;
@@ -209,9 +210,10 @@ function renderConnection(){
   control.setAttribute('aria-label',pendingConnection?'Cancel connection':session?'Disconnect':'Connect');
   control.title=pendingConnection?'Cancel connection':'';
   const unhealthy=(health?.consecutiveFailures??0)>=2;
-  const status=state.connectionBusy||(unhealthy&&session?'Server not responding':connected?'Connected':'Disconnected');
+  const status=cancellingConnection?'':state.connectionBusy||
+    (unhealthy&&session?'Server not responding':connected?'Connected':'Disconnected');
   $('connectionState').textContent=status;
-  $('stateLed').title=state.connectionBusy||status;
+  $('stateLed').title=status;
   $('stateLed').classList.toggle('proxy-off',connected&&(!routeActive||unhealthy));
   renderFlag($('selectedFlag'),server,icon('globe'));
   $('selectedText').textContent=server?`${displayServerName(server)} · ${server.type}`:session?'Current connection':'No server selected';
@@ -307,6 +309,7 @@ function syncTrayPanel(force=false){
     proxyInactive:current.state==='connected'&&current.connectionMode==='systemProxy'&&!current.systemProxy,
     retry:hasSession&&((current.health?.consecutiveFailures??0)>=2||current.outageSeconds!=null),
     busy:state.connectionBusy||current.health?.switching&&'Switching…'||'',
+    cancelling:cancellingConnection,
     pendingId:pendingConnection?.serverId??null,
     latencyMs:current.health?.latencyMs??current.lastGoodPingMs??current.initialLatencyMs,
     outageSeconds:current.outageSeconds??null,
@@ -417,6 +420,7 @@ async function cancelPendingConnection(){
   const {request}=pendingConnection;
   const revision=++connectionRevision;
   pendingConnection=null;
+  cancellingConnection=true;
   trayPanel.error='';
   renderConnection();
   try{
@@ -425,6 +429,7 @@ async function cancelPendingConnection(){
   }catch(error){if(revision===connectionRevision)connectionError(error)}
   finally{
     if(revision===connectionRevision){
+      cancellingConnection=false;
       state.connectionBusy=false;
       renderConnection();
       await refreshConnectionStatus({silent:true});

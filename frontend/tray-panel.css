@@ -65,6 +65,7 @@
 .tray-flag { width: 20px; height: 15px; display: grid; place-items: center; }
 .tray-flag .ui-icon { width: 15px; height: 15px; color: var(--muted); }
 .tray-state {
+  min-height: 1lh;
   grid-column: 2 / -1;
   min-width: 0;
   overflow: hidden;

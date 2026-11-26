@@ -78,7 +78,7 @@ function renderStatus(){
   $('trayConnection').dataset.state=snapshot.proxyInactive?'proxy-inactive':snapshot.retry?'unhealthy':snapshot.connected?'healthy':'idle';
   const state=snapshot.busy||(snapshot.proxyInactive?'Proxy inactive':snapshot.retry?'Not responding':snapshot.connected?'Connected':'Disconnected');
   const latency=snapshot.activeId?snapshot.latencyMs:server?.latency;
-  const detail=[state,Number.isFinite(latency)?`${latency} ms`:null,
+  const detail=snapshot.cancelling?'':[state,Number.isFinite(latency)?`${latency} ms`:null,
     snapshot.outageSeconds!=null?`${outageLabel(snapshot.outageSeconds)} outage`:null].filter(Boolean).join(' · ');
   if($('trayState').textContent!==detail)$('trayState').textContent=detail;
   $('trayState').title=detail;

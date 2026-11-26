@@ -211,7 +211,7 @@ try{
       document.querySelector('#connectionSwitch').click();
       return ${switchSnapshot};
     })()`);
-    assert.equal(afterClick.state,'Connecting…','Cancelling must not flash an intermediate status');
+    assert.equal(afterClick.state,'','The status text must be blank until cancellation finishes');
     assert.equal(afterClick.hatch,false,'The hatch must disappear on the cancel click');
     assert.equal(afterClick.disabled,true,'The switch must wait for Xray cancellation to finish');
     const cancelled=await waitFor(async()=>{
