@@ -291,8 +291,12 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .appearance-option .ui-icon{width:16px;height:16px}
 .appearance-option.light{background:#f8fafc;color:#25324b}
 .appearance-option.dark{background:#222c3f;color:#f8fafc}
-.appearance-option.system{background:linear-gradient(110deg,#f8fafc 49.5%,#222c3f 50.5%);color:var(--text)}
-.appearance-option.system span{background:color-mix(in srgb,var(--panel) 87%,transparent)}
+.appearance-option.system{
+  background:linear-gradient(110deg,
+    color-mix(in srgb,var(--panel) 87%,#f8fafc) 49.5%,
+    color-mix(in srgb,var(--panel) 87%,#222c3f) 50.5%) padding-box;
+  color:var(--text);
+}
 .custom-wheel {
   display:grid;
   grid-template-columns:minmax(0,172px) minmax(0,1fr);
