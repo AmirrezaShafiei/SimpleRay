@@ -1,14 +1,22 @@
 # SimpleRAY
 
-SimpleRAY is a Windows desktop client for Xray. It brings server profiles, subscriptions, latency testing, and quick server switching into one window. You can connect through Windows System Proxy or use TUN to route traffic by app.
+SimpleRAY is a Windows desktop client for Xray. It brings server profiles, subscriptions, latency testing, and quick server switching into one window. You can connect through Windows System Proxy or use TUN to route traffic by app. The Android beta uses the same profile formats with a native Android VPN.
 
 ## Download for Windows
 
-**Current release · 0.5.0-beta.11 · Windows x64**
+**Stable 1.2.5 · Windows x64**
 
-[**Download the Windows installer**](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.11/SimpleRay_0.5.0-beta.11_x64-setup.exe) · [Release notes](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v0.5.0-beta.11) · [SHA-256 checksum](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v0.5.0-beta.11/SHA256SUMS.txt)
+[Download the Windows installer](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v1.2.5/SimpleRay_1.2.5_x64-setup.exe) · [Release notes](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/v1.2.5) · [SHA-256 checksums](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/v1.2.5/SHA256SUMS.txt)
 
-The installer bundles Xray-core and Wintun. This is an unsigned beta installer. To verify the download, run `Get-FileHash .\SimpleRay_0.5.0-beta.11_x64-setup.exe -Algorithm SHA256` in PowerShell and compare the hash with `SHA256SUMS.txt`.
+The unsigned installer bundles Xray-core and Wintun. To check the download, run `Get-FileHash .\SimpleRay_1.2.5_x64-setup.exe -Algorithm SHA256` in PowerShell and compare the result with `SHA256SUMS.txt`.
+
+## Download for Android
+
+**0.2.0-beta.2 · Android 10+ · ARM64 or x86-64**
+
+[Standard APK](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/android-v0.2.0-beta.2/SimpleRAY-Android-0.2.0-beta.2.apk) · [Side-by-side APK](https://github.com/AmirrezaShafiei/SimpleRay/releases/download/android-v0.2.0-beta.2/SimpleRAY-Android-0.2.0-beta.2-Side-by-side.apk) · [Release notes and checksums](https://github.com/AmirrezaShafiei/SimpleRay/releases/tag/android-v0.2.0-beta.2)
+
+Use the standard APK for a fresh installation. If an earlier beta is installed, the side-by-side APK opens as **SimpleRAY Preview** and keeps the previous app and its profiles available. See the [Android build and backup guide](https://github.com/AmirrezaShafiei/SimpleRay/tree/android-v0.2.0-beta.2/android).
 
 ## Get connected
 
@@ -46,10 +54,10 @@ Configuration and subscription credentials are stored locally without encryption
 
 ## Build from source
 
-The published installer was built from [`v0.5.0-beta.11`](https://github.com/AmirrezaShafiei/SimpleRay/tree/v0.5.0-beta.11). Check out that tag to build the same version.
+Check out [`v1.2.5`](https://github.com/AmirrezaShafiei/SimpleRay/tree/v1.2.5) to build the current Windows release.
 
 - `npm ci` installs dependencies. `npm test` runs the JavaScript test suite. `npm run dev` opens a browser preview of the UI.
-- For the native desktop app, use Windows x64 with Node.js 22, Rust, the MSVC C++ build tools and WebView2. Stage the verified Xray-core and Wintun assets using the steps in the [Windows build workflow](https://github.com/AmirrezaShafiei/SimpleRay/blob/v0.5.0-beta.11/.github/workflows/windows-beta.yml).
-- `npm run desktop:dev` runs the native app. `npm run desktop:build` builds the NSIS installer. See the [successful Windows build and installation checks](https://github.com/AmirrezaShafiei/SimpleRay/actions/runs/44733907920).
+- For the native desktop app, use Windows x64 with Node.js 22, Rust, the MSVC C++ build tools and WebView2. Stage the verified Xray-core and Wintun assets using the steps in the [Windows build workflow](https://github.com/AmirrezaShafiei/SimpleRay/blob/v1.2.5/.github/workflows/windows-beta.yml).
+- `npm run desktop:dev` runs the native app. `npm run desktop:build` builds the NSIS installer.
 
 The bundled Xray-core is distributed under MPL-2.0. [XTLS/Xray-core](https://github.com/XTLS/Xray-core)
