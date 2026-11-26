@@ -1,0 +1,10 @@
+SimpleRAY Android bundles these unmodified native libraries.
+
+libXray v26.11.9 (MIT)
+https://github.com/XTLS/libXray/tree/v26.11.9
+
+Xray-core v26.11.9 (MPL-2.0), included in libXray
+https://github.com/XTLS/Xray-core/tree/v26.11.9
+
+hev-socks5-tunnel 2.20.0 (MIT)
+https://github.com/heiher/hev-socks5-tunnel/tree/2.20.0

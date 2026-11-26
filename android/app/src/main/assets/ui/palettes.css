@@ -1,0 +1,98 @@
+/* Personal Downloader palettes mapped to SimpleRay's shared window colors. */
+:root {
+  font-family:Inter,'Segoe UI',system-ui,-apple-system,sans-serif;
+  font-synthesis:none;
+  color-scheme:dark;
+  --bg:#101820;
+  --chrome:#1a2632;
+  --panel:#1d2a36;
+  --panel2:#243341;
+  --panelHi:#2a3d4f;
+  --blue:#60afff;
+  --text:#f3f7fb;
+  --muted:#c3d0dc;
+  --subtle:#98a9b9;
+  --border:#d8e8f832;
+  --rowBorder:#d8e8f822;
+  --button:var(--panel2);
+  --selection-opacity:15.7%;
+  --selected:color-mix(in srgb,var(--blue) var(--selection-opacity),var(--panel));
+  --selectedBorder:color-mix(in srgb,var(--blue) 72%,var(--panel));
+  --primary-action:color-mix(in srgb,var(--blue) 28%,var(--panel));
+  --primary-action-text:var(--text);
+  --green:#69d08b;
+  --yellow:#f4b95d;
+  --orange:#ff9d3f;
+  --red:#ff8c91;
+  --shadow:0 18px 58px rgba(0,0,0,.47);
+}
+:root[data-theme=light] {
+  color-scheme:light;
+  --bg:#f4f8fc;
+  --chrome:#f7fbff;
+  --panel:#ffffff;
+  --panel2:#f4f7fb;
+  --panelHi:#eaf3fd;
+  --blue:#0068da;
+  --text:#102a43;
+  --muted:#536980;
+  --subtle:#586f86;
+  --border:#2a4a6a1d;
+  --rowBorder:#2a4a6a14;
+  --selection-opacity:9%;
+  --primary-action:var(--blue);
+  --primary-action-text:#fff;
+  --green:#087745;
+  --yellow:#896000;
+  --orange:#a7470e;
+  --red:#ba2441;
+  --shadow:0 18px 45px rgba(35,61,107,.13);
+}
+:root[data-theme=dark][data-palette=jade] {
+  --bg:#10241f;
+  --chrome:#17372e;
+  --panel:#1d3d34;
+  --panel2:#234a3f;
+  --panelHi:#2c594c;
+  --blue:#61d5be;
+}
+:root[data-theme=light][data-palette=jade] {
+  --bg:#e8f5f0;
+  --chrome:#d4eee5;
+  --panel:#f7fffc;
+  --panel2:#e0f3eb;
+  --panelHi:#ccede0;
+  --blue:#00796b;
+}
+:root[data-theme=dark][data-palette=violet] {
+  --bg:#1d152b;
+  --chrome:#302143;
+  --panel:#35264a;
+  --panel2:#402e57;
+  --panelHi:#4d3867;
+  --blue:#c3a6ff;
+}
+:root[data-theme=light][data-palette=violet] {
+  --bg:#f2ecfa;
+  --chrome:#e8ddf6;
+  --panel:#fcf8ff;
+  --panel2:#f0e6fa;
+  --panelHi:#e8dbf8;
+  --blue:#6d42c6;
+}
+:root[data-theme=dark] {
+  --tint-base:#101820;
+  --accessible-custom-accent:color-mix(in srgb,var(--custom-accent) 46%,#fff);
+}
+:root[data-theme=light] {
+  --tint-base:#fff;
+  --accessible-custom-accent:color-mix(in srgb,var(--custom-accent) 40%,#000);
+}
+:root[data-palette=custom] {
+  --bg:color-mix(in srgb,var(--custom-primary) 12%,var(--tint-base));
+  --chrome:color-mix(in srgb,var(--custom-primary) 19%,var(--tint-base));
+  --panel:color-mix(in srgb,var(--custom-primary) 15%,var(--tint-base));
+  --panel2:color-mix(in srgb,var(--custom-primary) 23%,var(--tint-base));
+  --panelHi:color-mix(in srgb,var(--custom-primary) 29%,var(--tint-base));
+  --blue:var(--accessible-custom-accent);
+}
