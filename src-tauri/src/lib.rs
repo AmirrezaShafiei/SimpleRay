@@ -68,8 +68,12 @@ async fn fetch_subscription_text(url:String)->Result<String,String>{
     String::from_utf8(bytes).map_err(|_|"Subscription is not valid UTF-8".into())
 }
 #[tauri::command]
-async fn connect_server(app:AppHandle,manager:State<'_,EngineManager>,server_id:String,outbound:Value,display_name:Option<String>)->Result<ConnectionStatus,String>{
-    manager.connect(&app,server_id,outbound,display_name.unwrap_or_default()).await
+async fn connect_server(app:AppHandle,manager:State<'_,EngineManager>,request:u64,server_id:String,outbound:Value,display_name:Option<String>)->Result<ConnectionStatus,String>{
+    manager.connect(&app,request,server_id,outbound,display_name.unwrap_or_default()).await
+}
+#[tauri::command]
+async fn cancel_connection_attempt(app:AppHandle,manager:State<'_,EngineManager>,request:u64)->Result<ConnectionStatus,String>{
+    manager.cancel_connection(&app,request).await
 }
 #[tauri::command]
 async fn disconnect_server(app:AppHandle,manager:State<'_,EngineManager>)->Result<ConnectionStatus,String>{
@@ -258,7 +262,7 @@ pub fn run(){
         .invoke_handler(tauri::generate_handler![
             read_clipboard_text,fetch_subscription_text,
             phone_transfer_addresses,start_phone_transfer,poll_phone_transfer,cancel_phone_transfer,
-            connect_server,disconnect_server,connection_status,restore_system_proxy,
+            connect_server,cancel_connection_attempt,disconnect_server,connection_status,restore_system_proxy,
             ping_active_connection,measure_server_latency,test_download_speed,
             begin_manual_ping,cancel_manual_ping,finish_manual_ping,
             configure_server_switching,accept_server_suggestion,undo_server_switch,

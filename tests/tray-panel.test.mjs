@@ -27,6 +27,11 @@ test('the combined status card connects, disconnects or retries the correct serv
     {action:'restoreProxy',serverId:null,label:'Restore proxy',primary:true});
 });
 
+test('the tray offers Cancel while a manual switch is pending',()=>{
+  assert.deepEqual(trayConnectionAction({activeId:'A',pendingId:'B',connected:true,busy:'Switching…'}),
+    {action:'cancel',serverId:null,label:'Cancel',primary:false});
+});
+
 test('the tray has four visible rows, scrolls for more, and animates overflowing names on demand',()=>{
   const css=readFileSync('frontend/tray-panel.css','utf8');
   const html=readFileSync('frontend/tray-panel.html','utf8');

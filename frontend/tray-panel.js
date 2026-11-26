@@ -42,7 +42,7 @@ function showError(message){
 
 async function action(kind,serverId=null){
   const connectionAction=['connect','disconnect','retry','switch','restoreProxy'].includes(kind);
-  if(snapshot.busy&&connectionAction)return;
+  if(snapshot.busy&&connectionAction&&!(snapshot.pendingId&&kind==='connect'))return;
   if(kind!=='refresh')showError('');
   try{await invoke('tray_panel_action',{action:kind,serverId})}
   catch(error){if(kind!=='refresh')showError(String(error?.message??error))}
@@ -83,15 +83,16 @@ function renderStatus(){
   if($('trayState').textContent!==detail)$('trayState').textContent=detail;
   $('trayState').title=detail;
   const command=trayConnectionAction(snapshot);
-  $('trayConnect').textContent=snapshot.busy?'Working…':command.label;
-  $('trayConnect').disabled=Boolean(snapshot.busy||(command.action==='connect'&&!command.serverId));
+  $('trayConnect').textContent=snapshot.busy&&!snapshot.pendingId?'Working…':command.label;
+  $('trayConnect').disabled=Boolean((snapshot.busy&&!snapshot.pendingId)||(command.action==='connect'&&!command.serverId));
   $('trayConnect').dataset.primary=String(command.primary);
   $('trayConnect').onclick=()=>void action(command.action,command.serverId);
   showError(snapshot.error??'');
 }
 
 function selectServer(serverId){
-  if(serverId==null)return;
+  if(serverId==null||serverId===snapshot.pendingId)return;
+  if(snapshot.pendingId){void action('connect',serverId);return}
   if(serverId===snapshot.activeId){
     if(snapshot.proxyInactive)void action('restoreProxy');
     else if(snapshot.retry)void action('retry',serverId);
@@ -123,7 +124,7 @@ function updateRow(row,server,index){
   const {button,flag,frame,value,suggestion,latency,indicator}=row;
   const proposed=server.id===snapshot.suggestion?.serverId;
   const active=server.id===snapshot.activeId;
-  button.disabled=Boolean(snapshot.busy);
+  button.disabled=Boolean(snapshot.busy&&(!snapshot.pendingId||server.id===snapshot.pendingId));
   button.style.top=`${index*rowHeight}px`;
   button.classList.toggle('suggested',proposed);
   button.classList.toggle('keyboard-selected',server.id===keyboardServerId);
@@ -211,7 +212,7 @@ window.addEventListener('simpleray:tray-panel-snapshot',event=>{
   snapshot=event.detail;
   if(snapshot.appearance){appearance=restoreAppearance(snapshot.appearance);theme()}
   renderStatus();
-  const next=JSON.stringify([snapshot.activeId,snapshot.busy,snapshot.latencyMs,snapshot.suggestion]);
+  const next=JSON.stringify([snapshot.activeId,snapshot.busy,snapshot.pendingId,snapshot.latencyMs,snapshot.suggestion]);
   if(next!==lastListState){lastListState=next;updateList()}
 });
 window.addEventListener('storage',event=>{

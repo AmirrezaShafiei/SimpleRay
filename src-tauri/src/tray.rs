@@ -99,7 +99,7 @@ fn open_panel(app: &AppHandle, point: PhysicalPosition<f64>) -> tauri::Result<()
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum PanelAction { Refresh, Connect, Disconnect, RestoreProxy, Retry, Switch, Open, Exit, Close }
+pub enum PanelAction { Refresh, Connect, Cancel, Disconnect, RestoreProxy, Retry, Switch, Open, Exit, Close }
 
 pub fn panel_action(app:&AppHandle,window:&WebviewWindow,action:PanelAction,server_id:Option<String>)->Result<(),String>{
     if window.label()!=PANEL_WINDOW {return Err("Unknown tray panel".into());}
@@ -112,6 +112,7 @@ pub fn panel_action(app:&AppHandle,window:&WebviewWindow,action:PanelAction,serv
         action=>{
             let command=match action{
                 PanelAction::Connect=>"connect",
+                PanelAction::Cancel=>"cancel",
                 PanelAction::Disconnect=>"disconnect",
                 PanelAction::RestoreProxy=>"restoreProxy",
                 PanelAction::Retry=>"retry",

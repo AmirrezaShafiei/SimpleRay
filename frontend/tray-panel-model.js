@@ -13,6 +13,7 @@ export function trayServers(servers, {group='all', query='', suggestion=null}={}
 }
 
 export function trayConnectionAction(snapshot) {
+  if(snapshot.pendingId)return {action:'cancel',serverId:null,label:'Cancel',primary:false};
   if(snapshot.proxyInactive)return {action:'restoreProxy',serverId:null,label:'Restore proxy',primary:true};
   if(snapshot.retry&&snapshot.activeId)return {action:'retry',serverId:snapshot.activeId,label:'Retry',primary:true};
   if(snapshot.connected||snapshot.activeId)return {action:'disconnect',serverId:null,label:'Disconnect',primary:false};

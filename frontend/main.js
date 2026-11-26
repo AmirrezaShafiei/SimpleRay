@@ -28,6 +28,8 @@ const desktop={minimizeToTray:true,autoConnect:false,startup:false,loading:false
 let toastTimeout;
 let connectionPoll;
 let connectionRevision=0;
+let lastConnectionRequest=0;
+let pendingConnection=null;
 let activePing;
 let downloadTest;
 let editNameId;
@@ -189,13 +191,22 @@ function renderConnection(){
   const health=c.health;
   const session=connected||health?.recovering;
   const active=session?state.servers.find(s=>s.id===c.serverId)||null:null;
-  const server=session?active:getSelected();
-  const disabled=!nativeHost()||state.connectionBusy||(!session&&!server);
+  const server=pendingConnection
+    ? state.servers.find(s=>s.id===pendingConnection.serverId)
+    : session?active:getSelected();
   const usingTun=c.connectionMode==='tun';
   const routeActive=usingTun||c.systemProxy;
-  $('connectionSwitch').disabled=Boolean(disabled);
-  $('connectionSwitch').setAttribute('aria-checked',String(Boolean(session)));
-  $('connectionSwitch').setAttribute('aria-label',session?'Disconnect':'Connect');
+  const control=$('connectionSwitch');
+  control.disabled=!nativeHost()||(!pendingConnection&&Boolean(state.connectionBusy||(!session&&!server)));
+  control.dataset.cancellable=String(Boolean(pendingConnection));
+  if(pendingConnection){
+    control.removeAttribute('role');
+    control.removeAttribute('aria-checked');
+  }else{
+    control.setAttribute('role','switch');
+    control.setAttribute('aria-checked',String(Boolean(session)));
+  }
+  control.setAttribute('aria-label',pendingConnection?'Cancel connection':session?'Disconnect':'Connect');
   const unhealthy=(health?.consecutiveFailures??0)>=2;
   const status=state.connectionBusy||(unhealthy&&session?'Server not responding':connected?'Connected':'Disconnected');
   $('connectionState').textContent=status;
@@ -288,13 +299,14 @@ function syncTrayPanel(force=false){
   const hasSession=Boolean(activeId&&(current.state==='connected'||current.health?.recovering||current.outageSeconds!=null));
   const snapshot={
     appearance:restoreAppearance(state),
-    serverId:hasSession?activeId:trayConnectTarget(),
+    serverId:pendingConnection?.serverId??(hasSession?activeId:trayConnectTarget()),
     activeId:hasSession?activeId:null,
     connectionMode:hasSession?current.connectionMode:trayPanel.mode,
     connected:current.state==='connected',
     proxyInactive:current.state==='connected'&&current.connectionMode==='systemProxy'&&!current.systemProxy,
     retry:hasSession&&((current.health?.consecutiveFailures??0)>=2||current.outageSeconds!=null),
     busy:state.connectionBusy||current.health?.switching&&'Switching…'||'',
+    pendingId:pendingConnection?.serverId??null,
     latencyMs:current.health?.latencyMs??current.lastGoodPingMs??current.initialLatencyMs,
     outageSeconds:current.outageSeconds??null,
     suggestion:switching.mode==='suggest'?current.health?.suggestion??null:null,
@@ -315,6 +327,13 @@ function connectionError(error){
 }
 
 async function handleTrayAction({action,serverId}){
+  if(action==='cancel'){await cancelPendingConnection();return}
+  if(action==='connect'&&state.servers.some(server=>server.id===serverId)){
+    if(state.connection.health?.switching&&!pendingConnection)return;
+    await connectSelected(serverId);
+    if(!state.connectionBusy&&state.connection.state==='connected'&&state.connection.serverId===serverId)setSelected(serverId);
+    return;
+  }
   if(state.connectionBusy||state.connection.health?.switching)return;
   trayPanel.error='';
   if(action==='disconnect'){await disconnectConnection();return}
@@ -334,11 +353,6 @@ async function handleTrayAction({action,serverId}){
     try{state.connection=await nativeInvoke('retry_tray_connection',{serverId})}
     catch(error){connectionError(error)}
     finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
-    return;
-  }
-  if(action==='connect'&&state.servers.some(server=>server.id===serverId)){
-    await connectSelected(serverId);
-    if(state.connection.state==='connected'&&state.connection.serverId===serverId)setSelected(serverId);
     return;
   }
   syncTrayPanel(true);
@@ -370,18 +384,52 @@ async function connectSelected(id=state.selected){
   if(!nativeHost()){toast('Connections require the native Windows desktop app');return}
   const server=state.servers.find(s=>s.id===id);
   if(!server){toast('Select a server before connecting');return}
-  if(state.connectionBusy)return;
-  if(state.connection.state==='connected'&&state.connection.serverId===id)return;
+  if((state.connectionBusy&&!pendingConnection)||pendingConnection?.serverId===id)return;
+  if(!pendingConnection&&state.connection.state==='connected'&&state.connection.serverId===id)return;
+  let outbound;
+  try{outbound=outboundFromShareLink(server.uri)}
+  catch(error){connectionError(error);return}
   trayPanel.error='';
-  connectionRevision++;
+  const revision=++connectionRevision;
+  lastConnectionRequest=Math.max(lastConnectionRequest+1,Date.now()*1000);
+  const request=lastConnectionRequest;
+  pendingConnection={serverId:id,request};
   state.connectionBusy=state.connection.state==='connected'?'Switching…':'Connecting…';renderConnection();
   try{
-    const outbound=outboundFromShareLink(server.uri);
-    state.connection=await nativeInvoke('connect_server',{serverId:id,outbound,displayName:displayServerName(server)});
+    const current=await nativeInvoke('connect_server',{request,serverId:id,outbound,displayName:displayServerName(server)});
+    if(revision!==connectionRevision)return;
+    state.connection=current;
     trayPanel.lastServer=id;
     toast(state.connection.connectionMode==='tun'?'Connected · TUN is active':'Connected · Windows System Proxy is active');
-  }catch(err){connectionError(err)}
-  finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
+  }catch(err){if(revision===connectionRevision)connectionError(err)}
+  finally{
+    if(revision===connectionRevision){
+      pendingConnection=null;
+      state.connectionBusy=false;
+      renderConnection();
+      await refreshConnectionStatus({silent:true});
+    }
+  }
+}
+async function cancelPendingConnection(){
+  if(!pendingConnection)return;
+  const {request}=pendingConnection;
+  const revision=++connectionRevision;
+  pendingConnection=null;
+  trayPanel.error='';
+  state.connectionBusy='Cancelling…';
+  renderConnection();
+  try{
+    const current=await nativeInvoke('cancel_connection_attempt',{request});
+    if(revision===connectionRevision)state.connection=current;
+  }catch(error){if(revision===connectionRevision)connectionError(error)}
+  finally{
+    if(revision===connectionRevision){
+      state.connectionBusy=false;
+      renderConnection();
+      await refreshConnectionStatus({silent:true});
+    }
+  }
 }
 async function disconnectConnection(){
   if(!nativeHost()||state.connectionBusy)return;
@@ -393,7 +441,8 @@ async function disconnectConnection(){
   finally{state.connectionBusy=false;renderConnection();await refreshConnectionStatus({silent:true})}
 }
 async function toggleConnection(){
-  if(state.connection.state==='connected'||state.connection.health?.recovering)await disconnectConnection();
+  if(pendingConnection)await cancelPendingConnection();
+  else if(state.connection.state==='connected'||state.connection.health?.recovering)await disconnectConnection();
   else await connectSelected();
 }
 async function restoreSystemProxy(){

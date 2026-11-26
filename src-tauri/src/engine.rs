@@ -1,5 +1,5 @@
 //! Xray-core subprocess integration, local WinINet proxy lifecycle and HTTP real-delay.
-//! The app does NOT claim success until an HTTPS 204 response travels through Xray.
+//! The app verifies the outbound with an HTTPS probe through Xray before connecting.
 //! The external Xray binary must be installed locally or explicitly provided via
 //! SIMPLERAY_XRAY_PATH; no unverified binaries are downloaded or committed.
 use serde::Serialize;
@@ -7,7 +7,7 @@ use serde_json::{json,Value};
 use std::{fs,net::TcpListener,path::PathBuf,time::{Duration,Instant}};
 use tauri::{AppHandle,Manager};
 use tempfile::TempDir;
-use tokio::{net::TcpStream,process::{Child,Command},sync::{Mutex,Semaphore},task::JoinSet,time::{sleep,timeout}};
+use tokio::{net::TcpStream,process::{Child,Command},sync::{watch,Mutex,Semaphore},task::JoinSet,time::{sleep,sleep_until,timeout,timeout_at,Instant as TokioInstant}};
 use crate::{diagnostics::Diagnostics, routing::{self,Mode,Routing}, tray::{self,ConnectionColor}};
 use crate::system_proxy::{self,ProxyBackup};
 use crate::manual_ping::{self, ManualPing};
@@ -29,6 +29,8 @@ const PRIMARY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MANUAL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MANUAL_PRIMARY_TIMEOUT: Duration = Duration::from_secs(2);
 const EXTENDED_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECTION_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(12);
+const CONNECTION_CANCELLED: &str = "Connection request cancelled";
 const PROBE_TIMED_OUT: &str = "Proxy request timed out";
 
 #[derive(Clone, Copy)]
@@ -124,21 +126,61 @@ pub struct EngineManager {
     candidate_probes: Semaphore,
     network_events: Mutex<()>,
     manual_ping: Mutex<ManualPing>,
+    manual_connection: Mutex<ManualConnection>,
+    manual_execution: Mutex<()>,
+}
+
+#[derive(Default)]
+struct ManualConnection {
+    latest_request: u64,
+    cancel: Option<watch::Sender<bool>>,
+}
+
+impl ManualConnection {
+    fn begin(&mut self, request: u64) -> Result<watch::Receiver<bool>, String> {
+        if request <= self.latest_request {
+            return Err(CONNECTION_CANCELLED.into());
+        }
+        let (sender, receiver) = watch::channel(false);
+        self.latest_request = request;
+        self.cancel = Some(sender);
+        Ok(receiver)
+    }
+
+    fn cancel(&mut self, request: u64) {
+        if request >= self.latest_request {
+            self.latest_request = request;
+            self.cancel = None;
+        }
+    }
 }
 
 impl Default for EngineManager {
     fn default() -> Self {
-        Self { runtime: Mutex::default(), active_probe: Mutex::default(), download_test: Mutex::default(), candidate_probes: Semaphore::new(4), network_events: Mutex::new(()), manual_ping: Mutex::default() }
+        Self { runtime: Mutex::default(), active_probe: Mutex::default(), download_test: Mutex::default(), candidate_probes: Semaphore::new(4), network_events: Mutex::new(()), manual_ping: Mutex::default(), manual_connection: Mutex::default(), manual_execution: Mutex::default() }
     }
 }
 
 enum ConnectionChange {
-    Manual,
+    Manual(watch::Receiver<bool>),
     Retry,
     Suggested(SwitchDecision),
     Automatic(SwitchDecision),
     Undo,
     Recover(u64),
+}
+
+impl ConnectionChange {
+    async fn unless_cancelled<T>(
+        &mut self, operation: impl std::future::Future<Output = Result<T, String>>,
+    ) -> Result<T, String> {
+        let Self::Manual(cancel) = self else { return operation.await };
+        tokio::select! {
+            biased;
+            _ = manual_ping::wait_until_cancelled(cancel) => Err(CONNECTION_CANCELLED.into()),
+            result = operation => result,
+        }
+    }
 }
 
 struct SwitchRound {
@@ -354,6 +396,36 @@ async fn extended_probe(port: u16) -> Result<Probe, String> {
     extended_probe_with(trace_probe(&client), || backup_probe(&client), MANUAL_PRIMARY_TIMEOUT).await
 }
 
+async fn confirm_manual_connection(port: u16) -> Result<Probe, String> {
+    let client = probe_client(port, CONNECTION_CONFIRMATION_TIMEOUT)?;
+    confirm_manual_with(
+        trace_probe(&client), || backup_probe(&client),
+        MANUAL_PRIMARY_TIMEOUT, CONNECTION_CONFIRMATION_TIMEOUT,
+    ).await
+}
+
+async fn confirm_manual_with<P, B, F>(
+    primary: P, start_backup: B, head_start: Duration, window: Duration,
+) -> Result<Probe, String>
+where
+    P: std::future::Future<Output = Option<Probe>>,
+    B: FnOnce() -> F,
+    F: std::future::Future<Output = Result<Probe, String>>,
+{
+    let start = TokioInstant::now();
+    timeout_at(
+        start + window,
+        extended_probe_with(
+            primary,
+            || async {
+                sleep_until(start + head_start).await;
+                start_backup().await
+            },
+            head_start,
+        ),
+    ).await.map_err(|_| PROBE_TIMED_OUT)?
+}
+
 async fn extended_probe_with<P, B, F>(primary: P, start_backup: B, head_start: Duration) -> Result<Probe, String>
 where
     P: std::future::Future<Output = Option<Probe>>,
@@ -399,13 +471,25 @@ async fn kill(mut core:StartedXray){
     // TempDir drops here, removing per-session config containing credentials.
 }
 impl EngineManager {
-    pub async fn connect(&self,app:&AppHandle,server_id:String,outbound:Value,display_name:String)->Result<ConnectionStatus,String>{
+    pub async fn connect(&self,app:&AppHandle,request:u64,server_id:String,outbound:Value,display_name:String)->Result<ConnectionStatus,String>{
         if server_id.is_empty()||server_id.len()>256{return Err("Invalid selected server ID".into())}
-        self.change_connection(app,Profile{server_id,outbound,display_name:display_name.chars().take(160).collect()},ConnectionChange::Manual,None).await
+        let cancel = self.manual_connection.lock().await.begin(request)?;
+        // Let a cancelled core shut down before starting another one, particularly for TUN.
+        let _execution = self.manual_execution.lock().await;
+        if cancel.has_changed().is_err() { return Err(CONNECTION_CANCELLED.into()); }
+        let result = self.change_connection(app,Profile{server_id,outbound,display_name:display_name.chars().take(160).collect()},ConnectionChange::Manual(cancel),None).await;
+        self.manual_connection.lock().await.cancel(request);
+        result
+    }
+
+    pub async fn cancel_connection(&self, app: &AppHandle, request: u64) -> Result<ConnectionStatus, String> {
+        self.manual_connection.lock().await.cancel(request);
+        let _execution = self.manual_execution.lock().await;
+        self.status(app).await
     }
 
     async fn change_connection(
-        &self, app: &AppHandle, profile: Profile, change: ConnectionChange, expected: Option<(u64, u64)>
+        &self, app: &AppHandle, profile: Profile, mut change: ConnectionChange, expected: Option<(u64, u64)>
     ) -> Result<ConnectionStatus, String> {
         let route=routing::load(app)?;
         let (generation,replace_tun) = {
@@ -427,7 +511,7 @@ impl EngineManager {
             (runtime.generation,replace_tun)
         };
         let preflight=if replace_tun { Routing { mode:Mode::SystemProxy, ..route.clone() } } else { route.clone() };
-        let prepared = Self::prepare_connection(app,profile.outbound.clone(),&preflight).await;
+        let prepared = Self::prepare_connection(app,profile.outbound.clone(),&preflight,&mut change).await;
         let mut runtime = self.runtime.lock().await;
         if runtime.generation != generation { return Err("The connection request was superseded".into()); }
         runtime.pending = false;
@@ -447,17 +531,34 @@ impl EngineManager {
                 };
                 if !valid { return Err("The latest test no longer qualifies for switching".into()); }
             }
-            if replace_tun {
+            let traffic_origin = if replace_tun {
                 kill(new_core).await;
                 let old = runtime.active.take().ok_or("The active TUN session changed")?;
                 let old_route=old.routing.clone();
                 let old_profile=runtime.monitor.wanted.clone();
                 kill(old.core).await;
-                match Self::prepare_connection(app,profile.outbound.clone(),&route).await {
-                    Ok((core,result))=>{new_core=core;probe=result;}
+                let replacement = async {
+                    let (core, verified) = if matches!(change, ConnectionChange::Manual(_)) {
+                        // Preflight already confirmed the outbound. Only bring up
+                        // the Windows adapter here.
+                        let core = change.unless_cancelled(
+                            start_xray(app, profile.outbound.clone(), true, Some(&route)),
+                        ).await?;
+                        (core, probe)
+                    } else {
+                        Self::prepare_connection(app,profile.outbound.clone(),&route,&mut change).await?
+                    };
+                    let (core, traffic) = Self::capture_initial_traffic(app, core, route.mode, &mut change).await?;
+                    Ok::<_, String>((core, verified, traffic))
+                }.await;
+                match replacement {
+                    Ok((core,result,traffic))=>{
+                        new_core=core;probe=result;
+                        traffic
+                    }
                     Err(error)=>{
                         if let Some(old_profile)=old_profile {
-                            if let Ok((core,previous_probe))=Self::prepare_connection(app,old_profile.outbound.clone(),&old_route).await {
+                            if let Ok((core,previous_probe))=Self::prepare_connection(app,old_profile.outbound.clone(),&old_route,&mut ConnectionChange::Retry).await {
                                 let now=Instant::now();
                                 runtime.active=Some(Active{core,server_id:old_profile.server_id.clone(),backup:None,
                                     routing:old_route,last_poll:now,traffic_origin:TrafficBytes::default(),
@@ -469,11 +570,10 @@ impl EngineManager {
                         return Err(error);
                     }
                 }
-            }
-            // Read a starting point before enabling System Proxy for the new core.
-            let traffic_origin=match new_core.api_port {
-                Some(port)=>query_traffic(app,port,route.mode).await.unwrap_or_default(),
-                None=>TrafficBytes::default(),
+            } else {
+                let (core, traffic) = Self::capture_initial_traffic(app, new_core, route.mode, &mut change).await?;
+                new_core = core;
+                traffic
             };
             let previous_proxy=runtime.active.as_ref().and_then(|active|active.backup.as_ref().map(|backup|(backup,active.core.proxy_port)));
             let backup=match (route.mode,previous_proxy) {
@@ -502,7 +602,7 @@ impl EngineManager {
             runtime.last_good_ping=Some(initial_latency_ms);
             if let Some(ip)=probe.ip { app.state::<Diagnostics>().observation(app,&profile.server_id,ip); }
             runtime.monitor.reset_session(Some(profile),Some(initial_latency_ms),now);
-            if !matches!(change, ConnectionChange::Manual) {
+            if !matches!(change, ConnectionChange::Manual(_)) {
                 runtime.monitor.cooldown=Some(now+switching::SWITCH_COOLDOWN);
             }
             if let ConnectionChange::Automatic(decision) = change {
@@ -514,18 +614,47 @@ impl EngineManager {
         if result.is_err() && expected.is_some_and(|(_, revision)| runtime.monitor.revision == revision) {
             runtime.monitor.retry_later(Instant::now());
         }
-        if result.is_err() { app.state::<Diagnostics>().record("Connection start or switch failed."); }
+        if result.as_ref().is_err_and(|error| error != CONNECTION_CANCELLED) {
+            app.state::<Diagnostics>().record("Connection start or switch failed.");
+        }
         Self::sync_tray(app,&runtime);
         result
     }
 
-    async fn prepare_connection(app:&AppHandle,outbound:Value,route:&Routing)->Result<(StartedXray,Probe),String>{
-        let new_core=start_xray(app,outbound,true,Some(route)).await?;
-        match probe_round(new_core.probe_port).await {
+    async fn capture_initial_traffic(
+        app: &AppHandle, core: StartedXray, mode: Mode, change: &mut ConnectionChange,
+    ) -> Result<(StartedXray, TrafficBytes), String> {
+        let result = change.unless_cancelled(async {
+            Ok(match core.api_port {
+                Some(port) => query_traffic(app, port, mode).await.unwrap_or_default(),
+                None => TrafficBytes::default(),
+            })
+        }).await;
+        match result {
+            Ok(traffic) => Ok((core, traffic)),
+            Err(error) => {
+                kill(core).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn prepare_connection(app:&AppHandle,outbound:Value,route:&Routing,change:&mut ConnectionChange)->Result<(StartedXray,Probe),String>{
+        let new_core=change.unless_cancelled(start_xray(app,outbound,true,Some(route))).await?;
+        let manual = matches!(change, ConnectionChange::Manual(_));
+        let verified = change.unless_cancelled(async {
+            let result = if manual {
+                confirm_manual_connection(new_core.probe_port).await
+            } else {
+                probe_round(new_core.probe_port).await
+            };
+            result.map_err(|error| format!("Connection verification failed: {error}"))
+        }).await;
+        match verified {
             Ok(probe)=>Ok((new_core,probe)),
             Err(error)=>{
                 kill(new_core).await;
-                Err(format!("Connection verification failed: {error}"))
+                Err(error)
             }
         }
     }
@@ -599,6 +728,7 @@ impl EngineManager {
         self.change_connection(app,profile,ConnectionChange::Undo,Some(version)).await
     }
     pub async fn disconnect(&self,app:&AppHandle)->Result<ConnectionStatus,String>{
+        self.manual_connection.lock().await.cancel = None;
         let mut runtime=self.runtime.lock().await;
         runtime.generation=runtime.generation.wrapping_add(1);
         runtime.pending=false;
@@ -1037,6 +1167,46 @@ async fn sample_latency(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn manual_confirmation_delays_the_backup_even_if_the_primary_fails_immediately() {
+        let start = TokioInstant::now();
+        let head_start = Duration::from_millis(20);
+        let result = confirm_manual_with(
+            async { None },
+            || async {
+                assert!(start.elapsed() >= head_start);
+                Ok(Probe { elapsed_ms: 1, ip: None })
+            },
+            head_start, Duration::from_secs(1),
+        ).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn manual_confirmation_shares_one_deadline_between_both_probes() {
+        let result = confirm_manual_with(
+            std::future::pending(),
+            std::future::pending,
+            Duration::ZERO, Duration::from_millis(20),
+        ).await;
+        assert_eq!(result.err().as_deref(), Some(PROBE_TIMED_OUT));
+    }
+
+    #[tokio::test]
+    async fn replacing_or_cancelling_a_request_stops_it_even_when_commands_arrive_out_of_order() {
+        let mut current = ManualConnection::default();
+        let mut first = ConnectionChange::Manual(current.begin(1).unwrap());
+        let second = current.begin(2).unwrap();
+        current.cancel(1);
+        assert!(second.has_changed().is_ok());
+        let cancelled = first.unless_cancelled(async { Ok(()) }).await;
+        assert_eq!(cancelled.unwrap_err(), CONNECTION_CANCELLED);
+        current.cancel(3);
+        assert!(second.has_changed().is_err());
+        assert!(current.begin(3).is_err());
+        assert!(current.begin(4).is_ok());
+    }
+
     #[tokio::test]
     async fn extended_probe_accepts_a_late_primary_if_backup_fails() {
         let primary = async {
