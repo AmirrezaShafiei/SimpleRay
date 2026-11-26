@@ -159,7 +159,7 @@ async function stalledProxy(){
 const first=await stalledProxy();
 const second=await stalledProxy();
 try{
-  await withWebView(['/','/index.html'],async({evaluate})=>{
+  await withWebView(['/','/index.html'],async({call,evaluate})=>{
     const switchSnapshot=`(()=>{
       const button=document.querySelector('#connectionSwitch');
       const thumb=button.querySelector('.toggle-thumb');
@@ -177,17 +177,34 @@ try{
     })()`;
     const clickSwitch=()=>evaluate("document.querySelector('#connectionSwitch').click()");
     const state=()=>evaluate(switchSnapshot);
-    await waitFor(()=>evaluate("document.readyState==='complete' && !!document.querySelector('#connectionSwitch')"),'Main window did not finish loading');
-    await evaluate(`(()=>{
-      const add=(name,port)=>{
-        document.querySelector('#manualAddButton').click();
-        document.querySelector('#manualUri').value='socks5://127.0.0.1:'+port;
-        document.querySelector('#manualName').value=name;
-        document.querySelector('#manualForm').requestSubmit();
-      };
-      add('Connection test A',${first.port});
-      add('Connection test B',${second.port});
+    await evaluate(`(async()=>{
+      const {parseShareLink}=await import(new URL('config.js',location.href));
+      const servers=[
+        {id:'connection-test-a',name:'Connection test A',port:${first.port}},
+        {id:'connection-test-b',name:'Connection test B',port:${second.port}},
+      ].map(({id,name,port})=>({
+        ...parseShareLink('socks5://127.0.0.1:'+port),id,name,subscriptionId:null,
+      }));
+      localStorage.setItem('simpleray.configurations.v2',JSON.stringify({
+        version:2,servers,subscriptions:[],selectedId:servers[0].id,
+      }));
     })()`);
+    await call('Page.reload');
+    let startup;
+    await waitFor(async()=>{
+      try{
+        startup=await evaluate(`({
+          ready:document.readyState,
+          native:typeof window.__TAURI_INTERNALS__?.invoke==='function',
+          selected:document.querySelector('#selectedText')?.textContent,
+          disabled:document.querySelector('#connectionSwitch')?.disabled,
+          toast:document.querySelector('#toast')?.textContent,
+        })`);
+        return startup.ready==='complete'&&startup.native&&startup.selected?.includes('Connection test A')&&!startup.disabled;
+      }catch{return false}
+    },'Main window did not load the connection fixtures',8000).catch(error=>{
+      throw new Error(error.message+': '+JSON.stringify(startup));
+    });
     const idle=await state();
     assert.equal(idle.state,'Disconnected');
     assert.equal(idle.checked,'false');
