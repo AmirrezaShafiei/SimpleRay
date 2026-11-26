@@ -207,7 +207,13 @@ try{
     const backup=await waitFor(()=>first.reviews.find(r=>r.host==='www.gstatic.com'),'Backup connection probe did not start');
     assert.ok(backup.time-primary.time>=1500,'The second endpoint started too early');
     assert.ok(first.sockets.has(primary.socket),'The first probe stopped when the second began');
-    await clickSwitch();
+    const afterClick=await evaluate(`(()=>{
+      document.querySelector('#connectionSwitch').click();
+      return ${switchSnapshot};
+    })()`);
+    assert.equal(afterClick.state,'Connecting…','Cancelling must not flash an intermediate status');
+    assert.equal(afterClick.hatch,false,'The hatch must disappear on the cancel click');
+    assert.equal(afterClick.disabled,true,'The switch must wait for Xray cancellation to finish');
     const cancelled=await waitFor(async()=>{
       const current=await state();
       return current.state==='Disconnected'&&current;

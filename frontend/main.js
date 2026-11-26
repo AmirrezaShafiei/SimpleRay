@@ -418,7 +418,6 @@ async function cancelPendingConnection(){
   const revision=++connectionRevision;
   pendingConnection=null;
   trayPanel.error='';
-  state.connectionBusy='Cancelling…';
   renderConnection();
   try{
     const current=await nativeInvoke('cancel_connection_attempt',{request});
