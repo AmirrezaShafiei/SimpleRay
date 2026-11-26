@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-minimize" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="icon-maximize" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="icon-restore" viewBox="0 0 24 24"><path d="M9 8V5h10v10h-3"/><rect x="5" y="9" width="10" height="10" rx="1"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="icon-up" viewBox="0 0 24 24"><path d="M12 19V5m-5 5 5-5 5 5"/></symbol>
+    <symbol id="icon-down" viewBox="0 0 24 24"><path d="M12 5v14m-5-5 5 5 5-5"/></symbol>
+    <symbol id="icon-speedometer" viewBox="0 0 24 24"><path d="M3.8 18a9 9 0 1 1 16.4 0M12 15l4-4"/></symbol>
+    <symbol id="icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5m5 0a8 8 0 1 0-2 5.3"/></symbol>
+    <symbol id="icon-clipboard" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M8 12h8m-8 4h6"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 6-1 1a3 3 0 0 1-4-4l4-4a3 3 0 0 1 4 0m2-1 1-1a3 3 0 0 1 4 4l-4 4a3 3 0 0 1-4 0" transform="translate(1 1)"/></symbol>
+    <symbol id="icon-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+    <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M10 3h4l.5 2.6 1.6.9 2.5-.8 2 3.5-2 1.8v2l2 1.8-2 3.5-2.5-.8-1.6.9L14 21h-4l-.5-2.6-1.6-.9-2.5.8-2-3.5 2-1.8v-2l-2-1.8 2-3.5 2.5.8 1.6-.9z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="icon-phone" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 17h2"/></symbol>
+    <symbol id="icon-pin" viewBox="0 0 24 24"><path d="m15 3 6 6-4 1-3 4 1 3-1 1-8-8 1-1 3 1 4-3zM10 14l-6 6"/></symbol>
+    <symbol id="icon-star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.7 6.3.8-4.6 4.5 1.1 6.3-5.5-3-5.5 3 1.1-6.3L3 9.5l6.3-.8z"/></symbol>
+    <symbol id="icon-sort" viewBox="0 0 24 24"><path d="M8 19V5m-3 3 3-3 3 3m5-3v14m-3-3 3 3 3-3"/></symbol>
+    <symbol id="icon-play" viewBox="0 0 24 24"><path d="m8 5 12 7-12 7z"/></symbol>
+    <symbol id="icon-edit" viewBox="0 0 24 24"><path d="m14 5 5 5M4 20l4.7-1L20 7.7a2 2 0 0 0-3-3L5.7 16z"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 5H6a2 2 0 0 0-2 2v9"/></symbol>
+    <symbol id="icon-delete" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></symbol>
+    <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="icon-power" viewBox="0 0 24 24"><path d="M12 3v9m-5.7-6a8 8 0 1 0 11.4 0"/></symbol>
+    <symbol id="icon-qr" viewBox="0 0 24 24"><path d="M3 3h6v6H3zm12 0h6v6h-6zM3 15h6v6H3zm12 0h3v3h3m-6 3h3m3-6h.01m0 6h.01"/></symbol>
+    <symbol id="icon-file" viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10zm0 0v7h7"/></symbol>
+    <symbol id="icon-share" viewBox="0 0 24 24"><path d="M12 15V3m-4 4 4-4 4 4M5 11v9h14v-9"/></symbol>
+    <symbol id="icon-history" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 7m-1-12v5h5m3-2v5l3 2"/></symbol>
+    <symbol id="icon-grid" viewBox="0 0 24 24"><path d="M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z"/></symbol>
+    <symbol id="icon-routing" viewBox="0 0 24 24"><path d="M6 4v11a3 3 0 0 0 3 3h10m-4-4 4 4-4 4M6 10h10m-4-4 4 4-4 4"/></symbol>
+    <symbol id="icon-brand" viewBox="0 0 112 112"><rect width="112" height="112" rx="33" fill="#256dff"/><path d="M65 9 23 60h31l-7 41 46-59H63z" fill="#fff"/></symbol>
+</svg>

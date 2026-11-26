@@ -14,12 +14,14 @@ export function filterServers(servers,query='') {
   if(!term)return [...servers];
   return servers.filter(s=>[s.name,s.type,s.source].some(v=>String(v).toLocaleLowerCase().includes(term)));
 }
+const serverCollator = new Intl.Collator(undefined, {numeric:true, sensitivity:'base'});
 export function sortServers(servers,key,direction='asc') {
   const sign=direction==='desc'?-1:1;
+  const hasSort = SORT_COLUMNS.includes(key);
   return servers.map((server,i)=>({server,i})).sort((a,b)=>{
     const pinOrder=Number(Boolean(b.server.pinned))-Number(Boolean(a.server.pinned));
     if(pinOrder)return pinOrder;
-    if(!SORT_COLUMNS.includes(key))return a.i-b.i;
+    if(!hasSort)return a.i-b.i;
     const av=a.server[key],bv=b.server[key];
     if(key==='latency'){
       const am=typeof av!=='number'||!Number.isFinite(av),bm=typeof bv!=='number'||!Number.isFinite(bv);
@@ -29,7 +31,7 @@ export function sortServers(servers,key,direction='asc') {
     }
     let cmp;
     if(key==='favorite')cmp=Number(av)-Number(bv);
-    else cmp=String(av??'').localeCompare(String(bv??''),undefined,{numeric:true,sensitivity:'base'});
+    else cmp=serverCollator.compare(String(av??''), String(bv??''));
     return cmp*sign||a.i-b.i;
   }).map(x=>x.server);
 }

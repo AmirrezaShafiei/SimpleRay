@@ -22,7 +22,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import libXray.LibXray;
@@ -31,12 +34,15 @@ import org.json.JSONObject;
 
 public final class RayVpn extends VpnService {
     private static final String START = "sr.start", STOP = "sr.stop", SWITCH = "sr.switch", UNDO = "sr.undo";
-    private static final String CHANNEL = "ray-vpn";
+    static final String CHANNEL = "ray-vpn";
     private static final int NOTICE = 181;
+    private static final long NOTICE_INTERVAL_MS = 2000, HEALTH_INTERVAL_MS = 10_000;
     private static volatile JSONObject status = Core.object("phase", "disconnected");
     private static volatile RayVpn active;
     private static boolean socketProtectionRegistered;
     private final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1);
+    private final ExecutorService healthChecks = Executors.newSingleThreadExecutor();
+    private final ExecutorService candidateChecks = Executors.newSingleThreadExecutor();
     private volatile long generation;
     private volatile Session session;
     private JSONObject plan, profile, suggestion, undo;
@@ -44,15 +50,20 @@ public final class RayVpn extends VpnService {
     private ParcelFileDescriptor tun;
     private File configFile;
     private ConnectivityManager connectivity;
+    private NotificationManager notifications;
     private SecureStore store;
     private String phase = "disconnected";
-    private boolean core, bridge, healthRefresh;
+    private boolean core, bridge, healthRefresh, candidatesPending;
+    private Session pendingHealth;
+    private String lastNoticeMetrics = "";
+    private long lastNoticeUpdate;
     private long latency = -1, upload, download, savedUpload, savedDownload;
     private long rateUp, rateDown, lastStats, prevUpload, prevDownload, nextHealth, nextCandidates, nextRetry, undoUntil, cooldownUntil;
     private int failures, wins, samples, retryIndex, betterRounds;
     private String betterId;
 
     private record Session(String profileId, int probePort, String user, String secret) {}
+    private record Candidate(JSONObject profile, long delay) {}
 
     static JSONObject status() { return status; }
     static boolean running() { return status.optBoolean("running"); }
@@ -82,9 +93,9 @@ public final class RayVpn extends VpnService {
                     current.betterId = null;
                     current.betterRounds = 0;
                     current.nextCandidates = 0;
+                    current.plan.put("switching", mode);
+                    current.plan.put("candidates", plan.optJSONArray("candidates"));
                 }
-                current.plan.put("switching", mode);
-                current.plan.put("candidates", plan.optJSONArray("candidates"));
             } catch (Exception ignored) { }
         });
     }
@@ -124,7 +135,8 @@ public final class RayVpn extends VpnService {
         NotificationChannel channel = new NotificationChannel(CHANNEL, "VPN connection", NotificationManager.IMPORTANCE_LOW);
         channel.setShowBadge(false);
         channel.setSound(null, null);
-        getSystemService(NotificationManager.class).createNotificationChannel(channel);
+        notifications = getSystemService(NotificationManager.class);
+        notifications.createNotificationChannel(channel);
         worker.setRemoveOnCancelPolicy(true);
         worker.scheduleWithFixedDelay(this::monitor, 1, 1, TimeUnit.SECONDS);
     }
@@ -148,7 +160,7 @@ public final class RayVpn extends VpnService {
         long token = ++generation;
         status = Core.object("phase", "connecting", "running", true,
                 "profileId", status.optString("profileId"), "name", status.optString("name"));
-        startForeground(NOTICE, notification(status));
+        startForeground(NOTICE, notification(status, ""));
         String supplied = intent == null ? null : intent.getStringExtra("plan");
         worker.execute(() -> {
             if (token != generation) return;
@@ -176,6 +188,8 @@ public final class RayVpn extends VpnService {
     @Override public void onDestroy() {
         ++generation;
         active = null;
+        healthChecks.shutdownNow();
+        candidateChecks.shutdownNow();
         worker.execute(() -> {
             closeTunnel();
             profile = null;
@@ -245,7 +259,7 @@ public final class RayVpn extends VpnService {
             wins = 1;
             samples = 1;
             failures = retryIndex = 0;
-            nextHealth = SystemClock.elapsedRealtime() + 10_000;
+            nextHealth = SystemClock.elapsedRealtime() + HEALTH_INTERVAL_MS;
             publish("connected", true);
             Session established = session;
             new Thread(() -> saveExitIp(established), "ray-exit-ip").start();
@@ -310,29 +324,18 @@ public final class RayVpn extends VpnService {
                 publish(phase, true);
             }
             readTraffic(now);
-            if ("connected".equals(phase) && (healthRefresh || now >= nextHealth)) {
-                healthRefresh = false;
-                Session probe = session;
-                latency = probe == null ? -1 : Core.health(probe.probePort(), probe.user(), probe.secret());
-                if (generation != token) return;
-                samples++;
-                if (latency < 0 || !TProxyService.TProxyIsRunning()) failures++;
-                else { wins++; failures = 0; }
-                nextHealth = now + 10_000;
-                if (failures >= 2) {
-                    publish("problem", true);
-                    nextRetry = now + 1500;
-                }
-            }
-            if (now >= nextCandidates && !"off".equals(plan.optString("switching", "off"))) {
+            if ("connected".equals(phase) && pendingHealth == null && (healthRefresh || now >= nextHealth))
+                checkHealth(token);
+            if (("connected".equals(phase) || "problem".equals(phase)) && !candidatesPending
+                    && now >= nextCandidates && !"off".equals(plan.optString("switching", "off"))) {
                 nextCandidates = now + 30_000;
-                if (evaluateCandidates(token, now)) return;
+                checkCandidates(token);
             }
-            if ("problem".equals(phase) && now >= nextRetry) {
+            if ("problem".equals(phase) && !candidatesPending && now >= nextRetry) {
                 establish(token, true);
                 return;
             }
-            publish(phase, true);
+            if (token == generation) publish(phase, true);
         } catch (Exception failure) {
             if (token == generation && profile != null) {
                 stopEngine();
@@ -357,48 +360,98 @@ public final class RayVpn extends VpnService {
                 && !cap.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
     }
 
-    private boolean evaluateCandidates(long token, long now) throws Exception {
+    private void afterProbe(Runnable result) {
+        getMainExecutor().execute(() -> {
+            if (active == this) worker.execute(result);
+        });
+    }
+
+    private void checkHealth(long token) {
+        Session probe = session;
+        if (probe == null) return;
+        healthRefresh = false;
+        pendingHealth = probe;
+        healthChecks.execute(() -> {
+            long measured = Core.health(probe.probePort(), probe.user(), probe.secret());
+            afterProbe(() -> {
+                if (pendingHealth != probe) return;
+                pendingHealth = null;
+                if (token != generation || session != probe || !"connected".equals(phase)) return;
+                latency = measured;
+                samples++;
+                if (latency < 0 || !TProxyService.TProxyIsRunning()) failures++;
+                else { wins++; failures = 0; }
+                long now = SystemClock.elapsedRealtime();
+                nextHealth = now + HEALTH_INTERVAL_MS;
+                if (failures >= 2) {
+                    nextRetry = now + 1500;
+                    publish("problem", true);
+                } else publish(phase, true);
+            });
+        });
+    }
+
+    private void checkCandidates(long token) throws Exception {
         JSONArray candidates = plan.optJSONArray("candidates");
-        if (candidates == null) return false;
+        if (candidates == null) return;
         List<JSONObject> eligible = new ArrayList<>();
         for (int i = 0; i < Math.min(candidates.length(), 6); i++) {
             JSONObject item = candidates.getJSONObject(i);
             if (!item.optString("id").equals(profile.optString("id"))) eligible.add(item);
         }
-        JSONObject best = null;
-        long bestDelay = Long.MAX_VALUE;
-        boolean outage = "problem".equals(phase);
-        for (int i = 0; i < eligible.size(); i += 4) {
-            List<JSONObject> range = eligible.subList(i, Math.min(i + 4, eligible.size()));
-            JSONArray group = new JSONArray(range);
-            JSONArray results = ProbeService.ping(this, group, 5);
-            if (token != generation) return true;
-            for (int j = 0; j < results.length() && j < range.size(); j++) {
-                JSONObject measured = results.getJSONObject(j);
-                long delay = measured.optLong("delay", -1);
-                if (measured.optBoolean("success") && delay >= 0 && delay < bestDelay) {
-                    bestDelay = delay;
-                    best = range.get(j);
+        if (eligible.isEmpty()) return;
+        Session testedSession = session;
+        String mode = plan.optString("switching");
+        candidatesPending = true;
+        candidateChecks.execute(() -> {
+            Candidate best = findCandidate(eligible);
+            afterProbe(() -> {
+                candidatesPending = false;
+                if (token != generation || session != testedSession || plan == null
+                        || !mode.equals(plan.optString("switching")) || candidates != plan.optJSONArray("candidates")) return;
+                if ("connected".equals(phase) || "problem".equals(phase)) applyCandidate(best, mode);
+            });
+        });
+    }
+
+    private Candidate findCandidate(List<JSONObject> eligible) {
+        Candidate best = null;
+        for (int i = 0; i < eligible.size(); i += ProbeService.MAX_BATCH) {
+            List<JSONObject> batch = eligible.subList(i, Math.min(i + ProbeService.MAX_BATCH, eligible.size()));
+            try {
+                JSONArray results = ProbeService.ping(this, new JSONArray(batch), 5);
+                for (int j = 0; j < results.length() && j < batch.size(); j++) {
+                    JSONObject measured = results.getJSONObject(j);
+                    long delay = measured.optLong("delay", -1);
+                    if (measured.optBoolean("success") && delay >= 0 && (best == null || delay < best.delay()))
+                        best = new Candidate(batch.get(j), delay);
                 }
-            }
+            } catch (InterruptedException stopped) {
+                Thread.currentThread().interrupt();
+                return null;
+            } catch (Exception unavailable) { }
         }
-        if (best == null || (!outage && (latency < 0 || latency - bestDelay < 150 || bestDelay > latency * .60))) {
+        return best;
+    }
+
+    private void applyCandidate(Candidate best, String mode) {
+        boolean outage = "problem".equals(phase);
+        if (best == null || (!outage && (latency < 0 || latency - best.delay() < 150 || best.delay() > latency * .60))) {
             suggestion = null;
             betterId = null;
             betterRounds = 0;
-            return false;
+            publish(phase, true);
+            return;
         }
-        String id = best.getString("id");
+        String id = best.profile().optString("id");
         betterRounds = id.equals(betterId) ? betterRounds + 1 : 1;
         betterId = id;
-        if (!outage && (betterRounds < 2 || now < cooldownUntil)) return false;
-        if ("automatic".equals(plan.optString("switching"))) {
-            switchTo(best, true);
-            return true;
+        if (!outage && (betterRounds < 2 || SystemClock.elapsedRealtime() < cooldownUntil)) return;
+        if ("automatic".equals(mode)) switchTo(best.profile(), true);
+        else {
+            suggestion = best.profile();
+            publish(phase, true);
         }
-        suggestion = best;
-        publish(phase, true);
-        return false;
     }
 
     private void switchTo(JSONObject choice, boolean auto) {
@@ -472,6 +525,7 @@ public final class RayVpn extends VpnService {
     }
 
     private void stopEngine() {
+        pendingHealth = null;
         session = null;
         if (bridge) {
             readTraffic(SystemClock.elapsedRealtime());
@@ -523,10 +577,14 @@ public final class RayVpn extends VpnService {
                 || !last.optString("profileId").equals(next.optString("profileId"))
                 || !last.optString("suggestion").equals(next.optString("suggestion"))
                 || last.optBoolean("undo") != next.optBoolean("undo");
-        if (changed) {
-            if (foreground) getSystemService(NotificationManager.class).notify(NOTICE, notification(next));
-            TileService.requestListeningState(this, new ComponentName(this, RayTile.class));
+        long now = SystemClock.elapsedRealtime();
+        String metrics = noticeMetrics(next);
+        if (foreground && (changed || (now - lastNoticeUpdate >= NOTICE_INTERVAL_MS && !metrics.equals(lastNoticeMetrics)))) {
+            notifications.notify(NOTICE, notification(next, metrics));
+            lastNoticeMetrics = metrics;
+            lastNoticeUpdate = now;
         }
+        if (changed) TileService.requestListeningState(this, new ComponentName(this, RayTile.class));
     }
 
     static String label(String phase) {
@@ -547,17 +605,33 @@ public final class RayVpn extends VpnService {
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
-    private Notification notification(JSONObject detail) {
+    private static String noticeMetrics(JSONObject detail) {
+        if (!"connected".equals(detail.optString("phase"))) return "";
+        long rate = detail.optLong("rateDown");
+        String speed;
+        if (rate >= 1024 * 1024) speed = String.format(Locale.ROOT, "%.1f MB/s", rate / (1024d * 1024));
+        else if (rate >= 1024) speed = String.format(Locale.ROOT, "%.1f KB/s", rate / 1024d);
+        else speed = rate + " B/s";
+        long live = detail.optLong("live", -1);
+        return "↓ " + speed + "  ·  " + (live >= 0 ? live + " ms" : "Latency —");
+    }
+
+    private Notification notification(JSONObject detail, String metrics) {
         PendingIntent open = PendingIntent.getActivity(this, 0,
                 new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         JSONObject choice = detail.optJSONObject("suggestion");
-        String text = choice == null ? detail.optString("name") : "Try " + choice.optString("name");
+        String name = detail.optString("name");
+        String suggestion = choice == null ? "" : "Try " + choice.optString("name");
+        String text = metrics.isEmpty() ? (suggestion.isEmpty() ? name : suggestion) : metrics;
         Notification.Builder builder = new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ray_symbol)
                 .setContentTitle(label(detail.optString("phase"))).setContentText(text)
                 .setOnlyAlertOnce(true).setOngoing(true).setShowWhen(false)
                 .setVisibility(Notification.VISIBILITY_PRIVATE).setContentIntent(open)
                 .addAction(new Notification.Action.Builder(null, "Disconnect", command(STOP, 1)).build());
+        if (!metrics.isEmpty())
+            builder.setStyle(new Notification.BigTextStyle().bigText(metrics
+                    + (name.isBlank() ? "" : "\n" + name) + (suggestion.isBlank() ? "" : "\n" + suggestion)));
         if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         if (choice != null) builder.addAction(new Notification.Action.Builder(null, "Switch", command(SWITCH, 2)).build());
         else if (detail.optBoolean("undo")) builder.addAction(new Notification.Action.Builder(null, "Undo", command(UNDO, 3)).build());

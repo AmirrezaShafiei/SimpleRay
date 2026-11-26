@@ -19,13 +19,14 @@ function hsvToHex(color) {
   return '#' + hsvToRgb(color).map(channel => channel.toString(16).padStart(2, '0')).join('');
 }
 
+const spectra = new Map();
+
 export function attachColorWheel({canvas, target, brightness, hex, preview, read, write, commit}) {
   const context = canvas.getContext('2d');
   const size = canvas.width;
   const center = size / 2;
   const radius = center - 7;
   const colors = new Map();
-  let spectrum;
   let activePointer = null;
 
   function colorAt(x, y, value) {
@@ -38,6 +39,7 @@ export function attachColorWheel({canvas, target, brightness, hex, preview, read
 
   function draw(color) {
     if (!context) return;
+    let spectrum = spectra.get(size);
     if (!spectrum) {
       spectrum = context.createImageData(size, size);
       for (let y = 0; y < size; y++) {
@@ -54,6 +56,7 @@ export function attachColorWheel({canvas, target, brightness, hex, preview, read
           spectrum.data[i + 3] = opacity * 255;
         }
       }
+      spectra.set(size, spectrum);
     }
     context.putImageData(spectrum, 0, 0);
     context.save();

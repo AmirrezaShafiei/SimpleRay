@@ -18,6 +18,7 @@ import javax.crypto.spec.GCMParameterSpec;
 final class SecureStore {
     private static final String KEY = "SimpleRayMobileProfiles";
     private static final Object LOCK = new Object();
+    private static SecretKey cachedKey;
     private final Context context;
 
     SecureStore(Context context) { this.context = context.getApplicationContext(); }
@@ -58,15 +59,16 @@ final class SecureStore {
     }
 
     private SecretKey key() throws Exception {
+        if (cachedKey != null) return cachedKey;
         KeyStore store = KeyStore.getInstance("AndroidKeyStore");
         store.load(null);
         SecretKey existing = (SecretKey) store.getKey(KEY, null);
-        if (existing != null) return existing;
+        if (existing != null) return cachedKey = existing;
         KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
         generator.init(new KeyGenParameterSpec.Builder(KEY,
                 KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());
-        return generator.generateKey();
+        return cachedKey = generator.generateKey();
     }
 }

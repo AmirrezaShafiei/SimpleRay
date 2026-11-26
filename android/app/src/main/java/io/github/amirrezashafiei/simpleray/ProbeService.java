@@ -20,6 +20,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class ProbeService extends Service {
+    static final int MAX_BATCH = 5;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Messenger messenger = new Messenger(new Handler(Looper.getMainLooper(), request -> {
         worker.execute(() -> {
@@ -27,7 +28,7 @@ public final class ProbeService extends Service {
             try {
                 JSONArray profiles = new JSONArray(request.getData().getString("profiles", "[]"));
                 int timeout = request.getData().getInt("timeout");
-                if (profiles.length() > 4 || profiles.length() == 0 || (timeout != 5 && timeout != 10))
+                if (profiles.length() > MAX_BATCH || profiles.length() == 0 || (timeout != 5 && timeout != 10))
                     throw new IllegalArgumentException();
                 JSONArray configs = new JSONArray();
                 for (int i = 0; i < profiles.length(); i++) {

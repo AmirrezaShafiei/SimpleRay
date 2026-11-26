@@ -1,10 +1,12 @@
+import {createPortableBackup, readPortableBackup} from '../shared/portable-backup.js';
 import {createRepository, STORAGE_KEY} from '../shared/store.js';
 import {parseImport, validateSubscriptionUrl} from '../shared/config.js';
 import {outboundFromShareLink} from '../shared/xray-config.js';
-import {filterServers, sortServers} from '../shared/model.js';
+import {filterServers, latencyClass, sortServers} from '../shared/model.js';
 import {countryOf, displayServerName} from '../shared/flags.js';
 import {restoreAppearance, paintAppearance, THEME_PALETTES, APPEARANCE_MODES} from '../shared/theme.js';
 import {attachColorWheel} from '../shared/color-wheel.js';
+import {bytesPerSecond, DEFAULT_PING_SAMPLES, formatBytes} from '../shared/runtime.js';
 
 const $ = id => document.getElementById(id);
 const native = window.SimpleRayNative;
@@ -22,36 +24,39 @@ function loadPreferences() {
   try { saved = JSON.parse(modelStorage.getItem('prefs') || '{}'); } catch {}
   return {
     ...restoreAppearance(saved),
-    pings: [1,2,3].includes(saved.pings) ? saved.pings : 2,
+    pings: [1,2,3].includes(saved.pings) ? saved.pings : DEFAULT_PING_SAMPLES,
     switching: ['off','suggest','automatic'].includes(saved.switching) ? saved.switching : 'off',
     switchSource: typeof saved.switchSource === 'string' ? saved.switchSource : 'favorites',
     sort: ['favorite','name','type','latency','source'].includes(saved.sort) ? saved.sort : null,
     direction: saved.direction === 'desc' ? 'desc' : 'asc',
     autoConnect: !!saved.autoConnect,
-    wifiRefresh: !!saved.wifiRefresh,
     routing: saved.routing?.domains && saved.routing?.apps ? saved.routing : freshRouting(),
   };
 }
 const preferences = loadPreferences();
 const systemTheme = matchMedia('(prefers-color-scheme: dark)');
-const colorProbe = document.createElement('canvas');
-colorProbe.width = colorProbe.height = 1;
-const colorContext = colorProbe.getContext('2d', {willReadFrequently:true});
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let colorContext, paintFrame, lastBarColor, lastStatus;
 let systemDark = systemTheme.matches;
 let db = repo.snapshot();
 let records = repo.rows();
 let state = {phase:'disconnected'};
 let filter = 'all', source = '', query = '', selection = new Set(), limit = 120;
-let pings = new Map(), stableScores = new Map(), measuring = new Set(), lastPingToken = 0;
+const pings = new Map(), visiblePingCells = new Map();
+let stableScores = new Map(), measuring = new Set(), lastPingToken = 0;
 let shareQueue = [];
 let toastTimer;
-let closingTimer;
+const sheet = $('sheet');
+const sheetHandle = $('sheet-handle');
+let closingTimer, sheetMotion, drag, suppressHandleClick;
 let pendingUntil = 0;
 let detailsOpened = false;
 let downloadResult = null;
 const refreshing = new Set();
 const replies = new Map();
 let replyId = 0;
+let stagedPlan;
+let profilesRevision = 0;
 
 function fire(action, data = {}) { native?.request('', action, JSON.stringify(data)); }
 function request(action, data = {}) {
@@ -81,6 +86,10 @@ window.receiveNative = raw => {
     else reply.resolve(value.result);
   } else if (type === 'import') {
     importPayload(value, true);
+  } else if (type === 'backup') {
+    confirmRestore(value);
+  } else if (type === 'backupDestination') {
+    writeBackup('writeBackup');
   } else if (type === 'notice') {
     toast(value);
   } else if (type === 'device') {
@@ -105,10 +114,25 @@ function element(tag, options = {}, ...children) {
 function button(text, click, className = '') {
   return element('button', {type:'button', text, click, class:className});
 }
-function option(icon, label, action) {
+const svgNamespace = 'http://www.w3.org/2000/svg';
+function icon(name) {
+  const svg = document.createElementNS(svgNamespace, 'svg');
+  const use = document.createElementNS(svgNamespace, 'use');
+  svg.setAttribute('aria-hidden', 'true');
+  use.setAttribute('href', '../shared/icons.svg#icon-' + name);
+  svg.append(use);
+  return svg;
+}
+function iconButton(name, label, action, className = 'icon') {
+  return element('button', {class:className, type:'button', 'aria-label':label, click:action}, icon(name));
+}
+function option(name, label, action) {
   return element('button', {class:'option', type:'button', click:action},
-    element('span', {text:icon, 'aria-hidden':'true'}), element('span', {text:label}),
-    element('span', {text:'›', 'aria-hidden':'true'}));
+    icon(name), element('span', {text:label, dir:'auto'}), icon('chevron'));
+}
+const buttonIcon = (id, name) => $(id).querySelector('use').setAttribute('href', '../shared/icons.svg#icon-' + name);
+function updateText(node, text) {
+  if (node.textContent !== text) node.textContent = text;
 }
 function selectField(entries, value) {
   const select = element('select');
@@ -133,36 +157,82 @@ function toast(message) {
 }
 function show(title, ...content) {
   clearTimeout(closingTimer);
-  const sheet = $('sheet');
   delete sheet.dataset.leaving;
+  delete sheet.dataset.dragging;
+  drag = null;
+  sheet.style.removeProperty('--sheet-drag');
   $('sheet-title').textContent = title;
   sheet.setAttribute('aria-label', title);
   const body = $('sheet-body');
-  body.replaceChildren(...content);
-  delete body.dataset.enter;
-  requestAnimationFrame(() => { body.dataset.enter = 'true'; });
-  if (!sheet.open) sheet.showModal();
+  body.replaceChildren(...content.filter(item => item != null));
+  if (!sheet.open) {
+    sheet.showModal();
+    if (!reducedMotion.matches)
+      sheetMotion = sheet.animate([{transform:'translateY(24px)', opacity:.7}, {transform:'none', opacity:1}],
+        {duration:180, easing:'cubic-bezier(.15,.75,.30,1)'});
+  } else if (!reducedMotion.matches) {
+    body.animate([{opacity:.55, transform:'translateY(5px)'}, {opacity:1, transform:'none'}], 150);
+  }
   sheet.scrollTop = 0;
 }
-function close() {
+function close(offset = 0) {
   detailsOpened = false;
-  const sheet = $('sheet');
-  if (!sheet.open) return;
+  if (!sheet.open || sheet.dataset.leaving) return;
+  sheetMotion?.cancel();
+  sheet.style.setProperty('--sheet-drag', offset + 'px');
   sheet.dataset.leaving = 'true';
-  clearTimeout(closingTimer);
-  closingTimer = setTimeout(() => { sheet.close(); delete sheet.dataset.leaving; }, 140);
+  closingTimer = setTimeout(() => {
+    sheet.close();
+    delete sheet.dataset.leaving;
+    sheet.style.removeProperty('--sheet-drag');
+  }, reducedMotion.matches ? 0 : 140);
 }
+sheetHandle.addEventListener('pointerdown', event => {
+  if (event.button !== 0 || drag || sheet.dataset.leaving) return;
+  sheetMotion?.cancel();
+  suppressHandleClick = false;
+  drag = {id:event.pointerId, start:event.clientY, time:event.timeStamp, offset:0,
+    threshold:Math.min(85, Math.max(56, sheet.offsetHeight * .22))};
+  sheetHandle.setPointerCapture(event.pointerId);
+  sheet.dataset.dragging = '';
+});
+sheetHandle.addEventListener('pointermove', event => {
+  if (drag?.id !== event.pointerId) return;
+  const delta = event.clientY - drag.start;
+  suppressHandleClick ||= Math.abs(delta) > 8;
+  drag.offset = Math.max(0, delta);
+  sheet.style.setProperty('--sheet-drag', drag.offset + 'px');
+});
+function finishDrag(event) {
+  if (drag?.id !== event.pointerId) return;
+  const {offset, threshold, time} = drag;
+  const release = event.type === 'pointerup';
+  drag = null;
+  delete sheet.dataset.dragging;
+  sheet.style.removeProperty('--sheet-drag');
+  if (release && (offset >= threshold || (offset >= 34 && event.timeStamp - time < 190))) {
+    close(offset);
+  } else if (offset > 0 && !reducedMotion.matches) {
+    sheetMotion = sheet.animate([{transform:'translateY(' + offset + 'px)'}, {transform:'none'}],
+      {duration:150, easing:'ease-out'});
+  }
+}
+for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) sheetHandle.addEventListener(event, finishDrag);
+sheetHandle.addEventListener('click', event => {
+  if (event.detail === 0 || !suppressHandleClick) close();
+  suppressHandleClick = false;
+});
 window.rayBack = () => {
-  if ($('sheet').open) { close(); return true; }
+  if (sheet.open) { close(); return true; }
   if (selection.size) { selection.clear(); renderRows(); return true; }
   if (!$('search-wrap').hidden) { toggleSearch(false); return true; }
   return false;
 };
-$('sheet-close').addEventListener('click', close);
-$('sheet').addEventListener('cancel', event => { event.preventDefault(); close(); });
-$('sheet').addEventListener('click', event => {
-  if (event.target !== $('sheet')) return;
-  const rect = $('sheet').getBoundingClientRect();
+$('sheet-close').addEventListener('click', () => close());
+sheet.addEventListener('cancel', event => { event.preventDefault(); close(); });
+sheet.addEventListener('click', event => {
+  if (event.target !== sheet) return;
+  const rect = sheet.getBoundingClientRect();
   if (event.clientY < rect.top || event.clientX < rect.left || event.clientX > rect.right) close();
 });
 function formError(text = '') { return element('p', {class:'form-error', role:'alert', text}); }
@@ -182,7 +252,10 @@ function persistPrefs() {
 function sync() {
   db = repo.snapshot();
   records = repo.rows();
-  selection = new Set([...selection].filter(id => records.some(row => row.id === id)));
+  const availableIds = new Set(records.map(row => row.id));
+  if (source && !db.subscriptions.some(sub => sub.id === source)) source = '';
+  if (filter === 'subscriptions' && !db.subscriptions.length) filter = 'all';
+  selection = new Set([...selection].filter(id => availableIds.has(id)));
   renderRows();
   renderConnection();
   updatePlan();
@@ -211,30 +284,39 @@ function makePlan(server = rowById(db.selectedId)) {
 function updatePlan() {
   if (!native) return;
   const plan = makePlan();
-  try { modelStorage.setItem('launch', plan ? JSON.stringify(plan) : ''); } catch {}
+  const raw = plan ? JSON.stringify(plan) : '';
+  if (stagedPlan === raw) return;
+  try {
+    modelStorage.setItem('launch', raw);
+    stagedPlan = raw;
+  } catch {}
   if (plan) fire('policy', plan);
 }
-function getRows(forPing = false) {
-  const shown = records.filter(row => (!source || row.subscriptionId === source)
-    && (filter === 'all' || (filter === 'pinned' ? row.pinned : row.favorite)));
-  const scores = measuring.size ? stableScores : pings;
-  const data = filterServers(shown, query).map(row => {
-    const result = scores.get(row.id);
-    return {...row, latency:result?.average ?? null};
+function getRows() {
+  const shown = records.filter(row => {
+    if (filter === 'subscriptions') return row.subscriptionId && (!source || row.subscriptionId === source);
+    if (filter === 'pinned') return row.pinned;
+    if (filter === 'favorite') return row.favorite;
+    return true;
   });
-  const result = sortServers(data, preferences.sort, preferences.direction);
-  return forPing ? result : result.slice(0, limit);
+  const matches = filterServers(shown, query);
+  if (preferences.sort !== 'latency') return sortServers(matches, preferences.sort, preferences.direction);
+  const scores = measuring.size ? stableScores : pings;
+  return sortServers(matches.map(row => ({...row, latency:scores.get(row.id)?.average ?? null})),
+    preferences.sort, preferences.direction);
 }
 const countryFlag = row => {
   const code = countryOf(row);
-  return code ? String.fromCodePoint(...[...code].map(letter => 0x1f1e6 + letter.charCodeAt(0) - 97)) : '◉';
+  return code ? String.fromCodePoint(...[...code].map(letter => 0x1f1e6 + letter.charCodeAt(0) - 97)) : icon('globe');
 };
 function renderRows() {
   const list = $('server-list');
   const fragment = document.createDocumentFragment();
-  const shown = getRows();
+  const matches = getRows();
+  const shown = matches.slice(0, limit);
+  visiblePingCells.clear();
   for (const row of shown) fragment.append(makeRow(row));
-  if (getRows(true).length > shown.length) {
+  if (matches.length > limit) {
     fragment.append(button('Show more servers', () => { limit += 120; renderRows(); }, 'text-button'));
   }
   list.replaceChildren(fragment);
@@ -247,13 +329,20 @@ function renderRows() {
       ? 'Try another filter or search.' : 'Import a config or subscription to connect.');
     $('empty-add').hidden = !!records.length || !!repo.loadError;
   }
-  $('source-picker').hidden = !db.subscriptions.length;
-  $('source-picker').textContent = db.subscriptions.find(sub => sub.id === source)?.name || 'Subscriptions';
-  $('source-picker').setAttribute('aria-pressed', String(!!source));
+  const picker = $('source-picker');
+  const picked = db.subscriptions.find(sub => sub.id === source)?.name;
+  updateText(picker.querySelector('span'), picked || 'Subscriptions');
+  picker.title = picked || 'Choose a subscription';
+  picker.setAttribute('aria-label', picked ? 'Subscriptions: ' + picked : 'Subscriptions');
+  picker.setAttribute('aria-pressed', String(filter === 'subscriptions'));
+  for (const control of document.querySelectorAll('[data-filter]'))
+    control.setAttribute('aria-pressed', String(control.dataset.filter === filter));
   $('selection-actions').hidden = !selection.size;
   $('top-actions').hidden = !!selection.size;
-  $('ping-all').textContent = measuring.size ? 'Cancel ping' : '↻  Ping all';
-  $('ping-all').disabled = !shown.length && !measuring.size;
+  const ping = $('ping-all');
+  updateText(ping.querySelector('span'), measuring.size ? 'Cancel ping' : selection.size ? 'Ping selected' : 'Ping all');
+  buttonIcon('ping-all', measuring.size ? 'close' : 'activity');
+  ping.disabled = !shown.length && !selection.size && !measuring.size;
 }
 function toggleSelection(id) {
   if (selection.has(id)) selection.delete(id); else selection.add(id);
@@ -261,83 +350,105 @@ function toggleSelection(id) {
 }
 function makeRow(row) {
   const label = displayServerName(row);
+  let held = false;
   const main = button('', () => {
+    if (held) { held = false; return; }
     if (selection.size) toggleSelection(row.id);
-    else if (change(() => repo.setSelected(row.id)) && state.running && row.id !== state.profileId) serverMenu(rowById(row.id));
+    else if ((row.id === db.selectedId || change(() => repo.setSelected(row.id))) && state.running && row.id !== state.profileId)
+      serverMenu(rowById(row.id));
   }, 'row-target');
   let press, x, y;
   main.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
+    held = false;
     x = event.clientX; y = event.clientY;
-    press = setTimeout(() => toggleSelection(row.id), 430);
+    press = setTimeout(() => { held = true; toggleSelection(row.id); }, 430);
   });
   main.addEventListener('pointermove', event => {
     if (Math.hypot(event.clientX - x, event.clientY - y) > 10) clearTimeout(press);
   });
   for (const event of ['pointerup','pointercancel','pointerleave']) main.addEventListener(event, () => clearTimeout(press));
   main.addEventListener('contextmenu', event => { event.preventDefault(); clearTimeout(press); });
-  const indicators = [row.favorite ? '★' : '', row.pinned ? '↑' : '', row.id === state.profileId && state.running ? '✓' : ''].filter(Boolean).join(' ');
+  const indicators = [row.favorite && 'star', row.pinned && 'pin', row.id === state.profileId && state.running && 'check']
+    .filter(Boolean).map(icon);
   const name = element('strong', {class:'server-name', dir:'auto', text:label, title:label});
-  if (indicators) name.append(element('span', {class:'server-indicators', text:indicators}));
+  if (indicators.length) name.append(element('span', {class:'server-indicators'}, ...indicators));
   const meta = [row.type, row.source !== '—' ? row.source : null].filter(Boolean).join(' · ');
   const info = element('span', {class:'server-info'}, name, element('small', {class:'server-meta', text:meta}));
-  const data = pings.get(row.id);
-  const latency = data?.average;
-  const scoreClass = latency <= 200 ? 'good' : latency <= 400 ? 'fair' : latency <= 800 ? 'slow' : 'bad';
-  const scoreText = latency != null ? latency + ' ms' : measuring.has(row.id) ? 'Testing…' : data ? 'No reply' : '—';
-  const score = element('span', {class:'ping-cell'},
-    element('strong', {class:latency == null ? '' : scoreClass, text:scoreText}),
-    data?.attempted > 1 ? element('small', {text:data.count + '/' + data.attempted}) : null);
-  main.append(element('span', {class:'flag', 'aria-hidden':'true', text:countryFlag(row)}), info, score);
-  const dots = button('⋮', () => serverMenu(row), 'icon dots');
-  dots.setAttribute('aria-label', 'Options for ' + label);
+  const score = element('span', {class:'ping-cell'}, element('strong'), element('small'));
+  visiblePingCells.set(row.id, score);
+  renderPingCell(row.id);
+  const flag = element('span', {class:'flag', 'aria-hidden':'true'}, countryFlag(row));
+  main.append(flag, info, score);
+  const dots = iconButton('more', 'Options for ' + label, () => serverMenu(rowById(row.id)), 'icon dots');
   const selected = selection.size ? selection.has(row.id) : row.id === db.selectedId;
   return element('div', {class:'server-row', role:'listitem', 'data-selected':String(selected)}, main, dots);
 }
 
-function bytes(value, speed = false) {
-  let n = Number(value) || 0;
-  const units = ['B','KB','MB','GB','TB'];
-  let index = 0;
-  while (n >= 1024 && index < units.length - 1) { n /= 1024; index++; }
-  return (index ? n.toFixed(n >= 10 ? 0 : 1) : Math.round(n)) + ' ' + units[index] + (speed ? '/s' : '');
+function renderPingCell(id) {
+  const cell = visiblePingCells.get(id);
+  if (!cell) return;
+  const result = pings.get(id);
+  const value = result?.average;
+  const score = cell.firstElementChild, samples = cell.lastElementChild;
+  score.className = value == null ? '' : latencyClass(value);
+  updateText(score, value != null ? value + ' ms' : measuring.has(id) && !result ? 'Testing…' : result ? 'No reply' : '—');
+  samples.hidden = !(result?.attempted > 1);
+  if (!samples.hidden) updateText(samples, result.count + '/' + result.attempted);
 }
+
 const phases = {disconnected:'Disconnected',connecting:'Connecting…',connected:'Connected',reconnecting:'Reconnecting…',
   waiting:'Waiting for internet',problem:'Server unavailable',failed:'Could not start VPN',stopping:'Disconnecting…'};
 function renderConnection() {
-  const active = state.running;
+  const active = !!state.running;
   const label = $('status');
   if (label.dataset.phase !== state.phase) {
     label.dataset.phase = state.phase;
-    label.querySelector('span').textContent = phases[state.phase] || 'Disconnected';
-    if (!matchMedia('(prefers-reduced-motion: reduce)').matches)
-      label.querySelector('span').animate([{opacity:.40},{opacity:1}], {duration:150});
+    updateText(label.querySelector('span'), phases[state.phase] || 'Disconnected');
+    if (!reducedMotion.matches) label.querySelector('span').animate([{opacity:.40},{opacity:1}], {duration:150});
   }
   const selected = rowById(db.selectedId);
-  $('connection-name').textContent = (active && state.name) || (selected && displayServerName(selected)) || 'No server selected';
-  $('connect').textContent = active ? 'Disconnect' : 'Connect';
-  $('connect').disabled = state.phase === 'stopping' || (!active && (!selected || pendingUntil > Date.now()));
-  $('connection-data').hidden = $('connection-footer').hidden = !active;
-  $('live-latency').textContent = state.live >= 0 ? state.live + ' ms live' : 'Latency —';
-  $('transfer').textContent = bytes((state.up ?? 0) + (state.down ?? 0)) + ' used';
-  $('rates').textContent = '↓ ' + bytes(state.rateDown, true) + '  ↑ ' + bytes(state.rateUp, true);
-  const suggestion = $('suggestion');
-  const showSuggestion = !!(state.suggestion || state.undo);
-  suggestion.hidden = !showSuggestion;
-  if (showSuggestion) {
-    suggestion.querySelector('span').textContent = state.suggestion ? 'Try ' + state.suggestion.name : 'Switched server';
-    suggestion.querySelector('button').textContent = state.suggestion ? 'Switch' : 'Undo';
-    suggestion.querySelector('button').onclick = () => fire(state.suggestion ? 'switch' : 'undo');
+  updateText($('connection-name'), (active && state.name) || (selected && displayServerName(selected)) || 'No server selected');
+  const action = $('connect');
+  updateText(action.querySelector('span'), active ? 'Disconnect' : 'Connect');
+  action.setAttribute('aria-pressed', String(active));
+  action.disabled = state.phase === 'stopping' || (!active && (!selected || pendingUntil > Date.now()));
+  $('connection-data').hidden = $('details').hidden = !active;
+  if (active) {
+    const latency = $('live-latency');
+    const hasLatency = state.live >= 0;
+    updateText(latency, hasLatency ? state.live + ' ms' : '— ms');
+    latency.parentElement.dataset.grade = hasLatency ? latencyClass(state.live) : '';
+    updateText($('transfer'), formatBytes((state.up ?? 0) + (state.down ?? 0)) + ' used');
+    updateText($('rate-down'), bytesPerSecond(state.rateDown ?? 0));
+    updateText($('rate-up'), bytesPerSecond(state.rateUp ?? 0));
   }
-  if (detailsOpened && $('detail-current')) $('detail-current').textContent = phases[state.phase] || 'Disconnected';
+  const suggestion = $('suggestion');
+  suggestion.hidden = !(state.suggestion || state.undo);
+  if (!suggestion.hidden) {
+    updateText(suggestion.querySelector('span'), state.suggestion ? 'Try ' + state.suggestion.name : 'Switched server');
+    updateText(suggestion.querySelector('button'), state.suggestion ? 'Switch' : 'Undo');
+  }
+  if (detailsOpened && $('detail-current')) {
+    updateText($('detail-current'), phases[state.phase] || 'Disconnected');
+    updateText($('detail-traffic'), sessionTraffic());
+  }
 }
 function poll() {
-  if (!native) return;
+  if (!native || document.hidden) return;
   try {
-    const current = JSON.parse(native.connection());
-    const changed = current.profileId !== state.profileId || current.running !== state.running;
-    const wasConnected = state.phase === 'connected';
+    const raw = native.status();
+    const pendingExpired = pendingUntil && Date.now() >= pendingUntil;
+    if (pendingExpired) pendingUntil = 0;
+    if (raw === lastStatus) {
+      if (pendingExpired) renderConnection();
+      return;
+    }
+    const current = JSON.parse(raw);
+    lastStatus = raw;
     const switched = state.profileId !== current.profileId;
+    const changed = switched || current.running !== state.running;
+    const wasConnected = state.phase === 'connected';
     state = current;
     if (state.running) pendingUntil = 0;
     if (state.phase === 'connected' && (!wasConnected || switched) && state.profileId !== db.selectedId && rowById(state.profileId)) {
@@ -360,13 +471,26 @@ function connect(server = rowById(db.selectedId)) {
 
 function setColors() {
   paintAppearance(document.documentElement, preferences, !systemDark);
-  if (native && colorContext) {
-    colorContext.fillStyle = getComputedStyle(document.body).backgroundColor;
+  if (!native || paintFrame) return;
+  paintFrame = requestAnimationFrame(() => {
+    paintFrame = 0;
+    if (!colorContext) {
+      const probe = document.createElement('canvas');
+      probe.width = probe.height = 1;
+      colorContext = probe.getContext('2d', {willReadFrequently:true});
+    }
+    if (!colorContext) return;
+    const background = getComputedStyle(document.body).backgroundColor;
+    const dark = document.documentElement.dataset.theme === 'dark';
+    const signature = dark + background;
+    if (signature === lastBarColor) return;
+    lastBarColor = signature;
+    colorContext.fillStyle = background;
     colorContext.fillRect(0, 0, 1, 1);
     const rgb = colorContext.getImageData(0, 0, 1, 1).data.slice(0, 3);
     const color = '#' + Array.from(rgb, value => value.toString(16).padStart(2, '0')).join('');
-    fire('bars', {dark:document.documentElement.dataset.theme === 'dark', color});
-  }
+    fire('bars', {dark, color});
+  });
 }
 systemTheme.addEventListener('change', event => { systemDark = event.matches; setColors(); });
 function toggleSearch(force = $('search-wrap').hidden) {
@@ -381,17 +505,21 @@ function toggleSearch(force = $('search-wrap').hidden) {
 function addMenu() {
   detailsOpened = false;
   show('Add to SimpleRAY',
-    option('▤', 'Paste link', async () => {
+    option('clipboard', 'Paste link', async () => {
       const initial = await request('clipboard').catch(() => '');
       if (initial) importPayload(initial, false);
       else manualForm(null, '');
     }),
-    option('⌗', 'Scan QR code', () => { close(); fire('scan'); }),
-    option('▱', 'Import file', () => { close(); fire('file'); }),
-    option('＋', 'Add manually', () => manualForm()),
-    option('⌁', 'Add subscription', () => subscriptionForm()));
+    option('qr', 'Scan QR code', () => { close(); fire('scan'); }),
+    option('file', 'Import file', () => { close(); fire('file'); }),
+    option('plus', 'Add manually', () => manualForm()),
+    option('link', 'Add subscription', () => subscriptionForm()));
 }
 function importPayload(value, fromOutside) {
+  if (/^\s*\{/.test(value) && /"format"\s*:\s*"simpleray\.backup"/.test(value)) {
+    confirmRestore(String(value).trim());
+    return;
+  }
   const clean = fixText(value);
   let input = clean;
   let parsed;
@@ -445,7 +573,7 @@ function manualForm(server = null, initial = '', message = '') {
   const error = formError(message);
   const form = element('form', {class:'form'},
     field('Configuration', uri), field('Server name (optional)', name), error,
-    element('div', {class:'form-actions'}, button('Cancel', close),
+    element('div', {class:'form-actions'}, button('Cancel', () => close()),
       element('button', {class:'primary', type:'submit', text:server ? 'Save changes' : 'Continue'})));
   form.addEventListener('submit', event => {
     event.preventDefault();
@@ -477,7 +605,7 @@ function subscriptionForm(saved = null, link = '') {
   const submit = element('button', {class:'primary', type:'submit', text:'Save & update'});
   const form = element('form', {class:'form'},
     field('Subscription name', name), field('Subscription URL', url), field('Auto-update', interval), error,
-    element('div', {class:'form-actions'}, button('Cancel', close), submit));
+    element('div', {class:'form-actions'}, button('Cancel', () => close()), submit));
   form.addEventListener('submit', async event => {
     event.preventDefault();
     submit.disabled = true;
@@ -505,9 +633,11 @@ function subscriptionForm(saved = null, link = '') {
 async function refresh(sub, {silent = false, restore = false} = {}) {
   if (refreshing.has(sub.id)) return;
   refreshing.add(sub.id);
+  const revision = profilesRevision;
   try {
     const content = await request('fetch', {url:sub.url});
-    const current = repo.snapshot().subscriptions.find(item => item.id === sub.id);
+    if (revision !== profilesRevision) return;
+    const current = db.subscriptions.find(item => item.id === sub.id);
     if (!current || current.url !== sub.url) return;
     const outcome = repo.refreshSubscription(sub.id, fixText(content), new Date().toISOString(), {restoreDeleted:restore});
     sync();
@@ -515,7 +645,8 @@ async function refresh(sub, {silent = false, restore = false} = {}) {
       'Updated · ' + outcome.added + ' added' + (outcome.invalid ? ' · ' + outcome.invalid + ' skipped' : ''));
     return outcome;
   } catch (error) {
-    const current = repo.snapshot().subscriptions.find(item => item.id === sub.id);
+    if (revision !== profilesRevision) return;
+    const current = db.subscriptions.find(item => item.id === sub.id);
     if (current?.url === sub.url) {
       change(() => repo.setSubscriptionError(sub.id, 'Update failed. Saved servers are still available.'));
     }
@@ -525,7 +656,6 @@ async function refresh(sub, {silent = false, restore = false} = {}) {
 }
 async function scheduledRefresh() {
   if (document.visibilityState !== 'visible') return;
-  if (preferences.wifiRefresh && native && !JSON.parse(native.connection()).wifi) return;
   for (const sub of repo.dueSubscriptions()) {
     await refresh(sub, {silent:true}).catch(() => {});
   }
@@ -537,15 +667,13 @@ function deleteSubscription(sub) {
       return;
     }
     if (change(() => repo.deleteSubscription(sub.id, {keepNodes}))) {
-      if (source === sub.id) source = '';
-      renderRows();
       subscriptions();
       toast(keepNodes ? 'Subscription removed. Servers kept.' : 'Subscription removed');
     }
   };
   show('Remove subscription?', note(sub.name),
-    option('✓', 'Remove subscription and keep servers', () => remove(true)),
-    option('×', 'Remove subscription and delete its servers', () => remove(false)),
+    option('check', 'Remove subscription and keep servers', () => remove(true)),
+    option('delete', 'Remove subscription and delete its servers', () => remove(false)),
     button('Cancel', subscriptions));
 }
 function subscriptions() {
@@ -570,14 +698,14 @@ function subscriptions() {
       element('strong', {text:sub.name, dir:'auto'}), note(count + ' servers' + updated),
       sub.lastError ? formError(sub.lastError) : null, controls));
   }
-  show('Subscriptions', option('＋', 'Add subscription', () => subscriptionForm()),
+  show('Subscriptions', option('plus', 'Add subscription', () => subscriptionForm()),
     db.subscriptions.length ? list : note('Your subscriptions will appear here.'));
 }
 function rename(server) {
   const name = element('input', {value:server.name, maxlength:'160', required:'', dir:'auto'});
   const error = formError();
   const form = element('form', {class:'form'}, field('Name', name), error,
-    element('div', {class:'form-actions'}, button('Cancel', close), element('button', {type:'submit', class:'primary', text:'Save'})));
+    element('div', {class:'form-actions'}, button('Cancel', () => close()), element('button', {type:'submit', class:'primary', text:'Save'})));
   form.addEventListener('submit', event => {
     event.preventDefault();
     try { repo.renameServer(server.id, name.value); sync(); close(); }
@@ -594,7 +722,7 @@ function confirmRemove(ids) {
   show(ids.length === 1 ? 'Remove server?' : 'Remove ' + ids.length + ' servers?',
     note(containsSub ? 'Servers from subscriptions are hidden. Manually added servers are deleted.' :
       'The selected configuration will be removed.'),
-    element('div', {class:'form-actions'}, button('Cancel', close), button('Remove', () => {
+    element('div', {class:'form-actions'}, button('Cancel', () => close()), button('Remove', () => {
       if (change(() => repo.deleteServers(ids))) { ids.forEach(id => pings.delete(id)); close(); renderRows(); }
     }, 'danger')));
 }
@@ -603,41 +731,42 @@ function serverMenu(server) {
   detailsOpened = false;
   const active = state.running && state.profileId === server.id;
   const menu = [];
-  if (!active) menu.push(option('↗', state.running ? 'Connect to this server' : 'Connect', () => {
+  if (!active) menu.push(option('power', state.running ? 'Connect to this server' : 'Connect', () => {
     if (!change(() => repo.setSelected(server.id))) return;
     close(); connect(server);
   }));
   menu.push(
-    option('↻', 'Ping server', () => { close(); ping([server]); }),
-    option(server.favorite ? '★' : '☆', server.favorite ? 'Remove from favorites' : 'Add to favorites',
+    option('activity', 'Ping server', () => { close(); ping([server]); }),
+    option('star', server.favorite ? 'Remove from favorites' : 'Add to favorites',
       () => { if (change(() => repo.toggleFavorite(server.id))) close(); }),
-    option('↑', server.pinned ? 'Unpin' : 'Pin to top', () => { if (change(() => repo.togglePin(server.id))) close(); }),
-    option('✎', 'Rename', () => rename(server)),
+    option('pin', server.pinned ? 'Unpin' : 'Pin to top', () => { if (change(() => repo.togglePin(server.id))) close(); }),
+    option('edit', 'Rename', () => rename(server)),
   );
-  if (!server.subscriptionId) menu.push(option('▤', 'Edit configuration', () => manualForm(server)));
-  else menu.push(option('＋', 'Duplicate as editable config', () => {
+  if (!server.subscriptionId) menu.push(option('edit', 'Edit configuration', () => manualForm(server)));
+  else menu.push(option('plus', 'Duplicate as editable config', () => {
     if (change(() => repo.duplicateManual(server.id))) close();
   }));
   menu.push(
-    option('⧉', 'Copy config', () => { fire('copy', {text:server.uri, sensitive:true}); close(); toast('Config copied'); }),
-    option('↗', 'Share config', () => { close(); fire('share', {text:server.uri}); }),
-    option('○', 'Exit IP history', () => history(server.id)),
-    option('×', server.subscriptionId ? 'Hide server' : 'Delete server', () => confirmRemove([server.id])),
+    option('copy', 'Copy config', () => { fire('copy', {text:server.uri, sensitive:true}); close(); toast('Config copied'); }),
+    option('share', 'Share config', () => { close(); fire('share', {text:server.uri}); }),
+    option('history', 'Exit IP history', () => history(server.id)),
+    option('delete', server.subscriptionId ? 'Hide server' : 'Delete server', () => confirmRemove([server.id])),
   );
   show(displayServerName(server), ...menu);
 }
-function setFilter(value) {
-  filter = value; limit = 120;
-  for (const control of document.querySelectorAll('[data-filter]'))
-    control.setAttribute('aria-pressed', String(control.dataset.filter === filter));
+function setFilter(value, subscriptionId = '') {
+  filter = value;
+  source = subscriptionId;
+  limit = 120;
   renderRows();
 }
 function chooseSource() {
-  const options = [option('≡', 'All sources', () => { source = ''; limit = 120; close(); renderRows(); })];
-  for (const sub of db.subscriptions) options.push(option('⌁', sub.name, () => {
-    source = sub.id; limit = 120; close(); renderRows();
-  }));
-  show('Subscription filter', ...options);
+  const select = id => { setFilter('subscriptions', id); close(); };
+  const entries = db.subscriptions.length
+    ? [option('list', 'All subscriptions', () => select('')),
+      ...db.subscriptions.map(sub => option('link', sub.name, () => select(sub.id)))]
+    : [note('Your subscriptions will appear here.'), option('plus', 'Add subscription', () => subscriptionForm())];
+  show('Subscriptions', ...entries);
 }
 function listOptions() {
   const keys = [['','Saved order'],['favorite','Favorites'],['name','Name'],['type','Protocol'],['latency','Latency'],['source','Source']];
@@ -651,7 +780,7 @@ function listOptions() {
   sort.addEventListener('change', apply);
   direction.addEventListener('change', apply);
   show('Server list', element('div', {class:'form'}, field('Sort by', sort), field('Order', direction)),
-    option('⌁', 'Manage subscriptions', subscriptions));
+    option('link', 'Manage subscriptions', subscriptions));
 }
 
 async function ping(rows) {
@@ -664,24 +793,26 @@ async function ping(rows) {
   const token = ++lastPingToken;
   for (const id of measuring) pings.delete(id);
   renderRows();
+  const rounds = preferences.pings;
+  let responded = false;
   try {
-    for (let round = 0; round < preferences.pings; round++) {
-      const responded = [...results.values()].some(list => list.some(delay => delay >= 0));
-      const timeout = round > 0 && round === preferences.pings - 1 && !responded ? 10 : 5;
-      for (let offset = 0; offset < targets.length; offset += 4) {
+    for (let round = 0; round < rounds; round++) {
+      const timeout = round > 0 && round === rounds - 1 && !responded ? 10 : 5;
+      for (let offset = 0; offset < targets.length; offset += 5) {
         if (token !== lastPingToken) return;
-        const batch = targets.slice(offset, offset + 4);
+        const batch = targets.slice(offset, offset + 5);
         const tested = await request('ping', {profiles:batch, timeout});
         if (token !== lastPingToken) return;
         batch.forEach((item, index) => {
           const values = results.get(item.id);
           const sample = tested?.[index];
-          values.push(sample?.success && Number(sample.delay) >= 0 ? Number(sample.delay) : -1);
+          values.push(sample?.success && Number.isFinite(sample.delay) && sample.delay >= 0 ? sample.delay : -1);
           const good = values.filter(delay => delay >= 0);
+          responded ||= good.length > 0;
           pings.set(item.id, {average:good.length ? Math.round(good.reduce((a,b) => a+b, 0) / good.length) : null,
             count:good.length, attempted:values.length});
+          renderPingCell(item.id);
         });
-        renderRows();
       }
     }
   } catch (error) { if (token === lastPingToken) toast(safeError(error)); }
@@ -691,6 +822,7 @@ async function ping(rows) {
 }
 function cancelPing() {
   ++lastPingToken;
+  for (const id of measuring) if (!pings.has(id) && stableScores.has(id)) pings.set(id, stableScores.get(id));
   measuring = new Set();
   renderRows();
   toast('Ping cancelled');
@@ -712,24 +844,33 @@ function settings() {
   const paletteNames = {ocean:'Ocean',jade:'Jade',violet:'Violet',custom:'Custom'};
   const palette = element('div', {class:'theme-grid'});
   const contrast = element('div', {class:'segments'});
-  const canvas = element('canvas', {width:'196', height:'196', 'aria-label':'Color wheel'});
-  const target = selectField([['themePrimary','Primary'],['themeAccent','Accent']], 'themePrimary');
-  const brightness = element('input', {type:'range', min:'0', max:'100', 'aria-label':'Brightness'});
-  const hex = element('input', {type:'text', maxlength:'7', autocomplete:'off', spellcheck:'false', 'aria-label':'Hex color'});
-  const preview = element('span', {class:'wheel-preview', 'aria-hidden':'true'});
-  const wheel = element('div', {class:'wheel'}, canvas, element('div', {class:'wheel-fields'},
-    field('Color', target), field('Brightness', brightness), field('HEX', hex), preview));
-  wheel.hidden = preferences.palette !== 'custom';
-  const selector = attachColorWheel({canvas,target,brightness,hex,preview,read:key => preferences[key],
-    write:(key,value) => { preferences[key] = value; setColors(); selector.refresh(); }, commit:persistPrefs});
+  const wheel = element('div', {class:'wheel', hidden:''});
+  let selector, wheelFrame;
+  const updateWheel = () => {
+    wheel.hidden = preferences.palette !== 'custom';
+    if (wheel.hidden || selector || wheelFrame) return;
+    wheelFrame = requestAnimationFrame(() => {
+      wheelFrame = 0;
+      if (wheel.hidden || !wheel.isConnected) return;
+      const canvas = element('canvas', {width:'196', height:'196', 'aria-label':'Color wheel'});
+      const target = selectField([['themePrimary','Primary'],['themeAccent','Accent']], 'themePrimary');
+      const brightness = element('input', {type:'range', min:'0', max:'100', 'aria-label':'Brightness'});
+      const hex = element('input', {type:'text', maxlength:'7', autocomplete:'off', spellcheck:'false', 'aria-label':'Hex color'});
+      const preview = element('span', {class:'wheel-preview', 'aria-hidden':'true'});
+      wheel.append(canvas, element('div', {class:'wheel-fields'}, field('Color', target),
+        field('Brightness', brightness), field('HEX', hex), preview));
+      selector = attachColorWheel({canvas,target,brightness,hex,preview,read:key => preferences[key],
+        write:(key,value) => { preferences[key] = value; setColors(); selector.refresh(); }, commit:persistPrefs});
+      selector.refresh();
+    });
+  };
   for (const key of THEME_PALETTES) {
     const control = element('button', {type:'button', 'data-theme-palette':key,
       'aria-pressed':String(preferences.palette === key), click:() => {
         preferences.palette = key; persistPrefs(); setColors();
         for (const item of palette.children) item.setAttribute('aria-pressed', String(item.dataset.themePalette === key));
-        wheel.hidden = key !== 'custom';
-        if (!wheel.hidden) selector.refresh();
-      }}, element('span', {class:'swatch ' + key}), document.createTextNode(paletteNames[key]));
+        updateWheel();
+      }}, element('span', {class:'theme-swatch ' + key}), document.createTextNode(paletteNames[key]));
     palette.append(control);
   }
   for (const key of APPEARANCE_MODES) {
@@ -754,15 +895,74 @@ function settings() {
       field('Server switching', mode), field('Candidate source · up to six servers', candidate))),
     group('Android connection',
       switchLine('Auto-connect when opening the app', preferences.autoConnect, value => { preferences.autoConnect=value; persistPrefs(); }),
-      option('▦', 'Add Quick Settings tile', () => fire('tile')),
-      option('⏻', 'Always-on VPN and block outside tunnel', () => fire('vpnSettings')),
-      option('↳', 'Routing rules', routing)),
-    group('Subscriptions', switchLine('Auto-update on Wi-Fi only', preferences.wifiRefresh,
-      value => { preferences.wifiRefresh=value; persistPrefs(); }), option('⌁', 'Manage subscriptions', subscriptions)),
-    group('Support', option('▤', 'Error report', diagnostics), note('SimpleRAY Android 0.2.0-beta.1')),
+      option('activity', 'Connection notification', () => fire('notificationSettings')),
+      option('grid', 'Add Quick Settings tile', () => fire('tile')),
+      option('power', 'Always-on VPN and block outside tunnel', () => fire('vpnSettings')),
+      option('routing', 'Routing rules', routing)),
+    group('Subscriptions', option('link', 'Manage subscriptions', subscriptions)),
+    group('Data', option('file', 'Portable Backup', backupMenu)),
+    group('Support', option('file', 'Error report', diagnostics), note('SimpleRAY Android 0.2.0-beta.2')),
   );
-  if (!wheel.hidden) selector.refresh();
+  updateWheel();
 }
+function backupMenu() {
+  detailsOpened = false;
+  show('Portable Backup',
+    note('Back up servers, subscriptions, favorites and pins. The file contains server credentials.'),
+    option('down', 'Save backup file', () => fire('saveBackup')),
+    option('share', 'Share backup file', () => writeBackup('shareBackup')),
+    option('file', 'Restore from backup', () => fire('openBackup')));
+}
+
+async function writeBackup(action) {
+  try {
+    await request(action, {text:createPortableBackup(db)});
+    if (action === 'writeBackup') {
+      close();
+      toast('Backup file saved');
+    }
+  } catch (failure) {
+    show('Portable Backup', formError(safeError(failure)), button('Back', backupMenu));
+  }
+}
+
+function confirmRestore(text) {
+  detailsOpened = false;
+  let backup;
+  try { backup = readPortableBackup(String(text).trim()); }
+  catch (failure) {
+    show('Portable Backup', formError(safeError(failure)), button('Back', backupMenu));
+    return;
+  }
+  const error = formError();
+  const replacing = db.servers.length || db.subscriptions.length;
+  const restore = button(replacing ? 'Replace profiles' : 'Restore profiles', () => {
+    poll();
+    if (state.running || pendingUntil > Date.now()) {
+      error.textContent = 'Disconnect the VPN before restoring a backup.';
+      return;
+    }
+    try {
+      repo.restoreProfiles(backup);
+      profilesRevision++;
+      ++lastPingToken;
+      measuring.clear();
+      pings.clear();
+      selection.clear();
+      filter = 'all';
+      source = query = $('search').value = '';
+      limit = 120;
+      sync();
+      close();
+      toast('Backup restored');
+    } catch (failure) { error.textContent = safeError(failure); }
+  }, 'primary');
+  show('Restore backup',
+    note(backup.servers.length + ' servers · ' + backup.subscriptions.length + ' subscriptions'),
+    replacing ? note('Restoring replaces the servers and subscriptions currently on this device.') : null,
+    error, element('div', {class:'form-actions'}, button('Cancel', () => close()), restore));
+}
+
 function normalizeDomain(value) {
   const text = String(value).trim().toLowerCase().replace(/^\.+/, '');
   const parsed = new URL(text.includes('://') ? text : 'https://' + text);
@@ -771,7 +971,7 @@ function normalizeDomain(value) {
       || /^\d+(?:\.\d+){3}$/.test(host)) throw new Error('Enter a website or domain suffix');
   return host;
 }
-async function routing() {
+function routing() {
   detailsOpened = false;
   const current = JSON.parse(JSON.stringify(preferences.routing));
   const mode = selectField([['all','All apps'],['only','Only selected apps'],['except','All except selected apps']], current.appMode);
@@ -787,7 +987,7 @@ async function routing() {
   const redrawRules = () => {
     rules.replaceChildren(...current.domains.map((rule, index) =>
       element('div', {class:'rule'}, element('span', {text:rule.host}), element('strong', {text:rule.mode === 'direct' ? 'Direct' : 'Tunnel'}),
-        button('×', () => { current.domains.splice(index, 1); redrawRules(); }, 'icon'))));
+        iconButton('delete', 'Remove ' + rule.host, () => { current.domains.splice(index, 1); redrawRules(); }))));
   };
   const append = () => {
     try {
@@ -825,19 +1025,29 @@ async function routing() {
       toast('Routing saved');
     }, 'primary')));
   redrawRules();
-  try {
-    const apps = await request('apps');
-    function listApps() {
-      const term = search.value.trim().toLowerCase();
-      const list = apps.filter(app => (app.label + ' ' + app.id).toLowerCase().includes(term));
-      appList.replaceChildren(...list.map(app => switchLine(app.label, checked.has(app.id), on => {
-        if (on) checked.add(app.id); else checked.delete(app.id);
-      })));
-      if (!list.length) appList.append(note('No matching apps'));
+  let installedApps;
+  function showApps(apps) {
+    const term = search.value.trim().toLowerCase();
+    const matches = apps.filter(app => (app.label + ' ' + app.id).toLowerCase().includes(term));
+    appList.replaceChildren(...matches.map(app => switchLine(app.label, checked.has(app.id), on => {
+      if (on) checked.add(app.id); else checked.delete(app.id);
+    })));
+    if (!matches.length) appList.append(note('No matching apps'));
+  }
+  async function loadApps() {
+    if (installedApps || appPanel.hidden) return;
+    installedApps = request('apps');
+    try { showApps(await installedApps); }
+    catch {
+      installedApps = undefined;
+      appList.replaceChildren(note('Could not read the app list.'));
     }
-    search.addEventListener('input', listApps);
-    listApps();
-  } catch { appList.replaceChildren(note('Could not read the app list.')); }
+  }
+  search.addEventListener('input', async () => {
+    try { if (installedApps) showApps(await installedApps); } catch {}
+  });
+  mode.addEventListener('change', loadApps);
+  loadApps();
 }
 function history(id) {
   detailsOpened = false;
@@ -848,34 +1058,34 @@ function history(id) {
     element('div', {class:'list-entry'}, element('strong', {text:row.ip}), note(new Date(row.time).toLocaleString()))))
     : note('An exit IP is recorded after a successful connection when the lookup responds.'));
 }
+const sessionTraffic = () => 'Downloaded ' + formatBytes(state.down ?? 0) + ' · Uploaded ' + formatBytes(state.up ?? 0);
 function details() {
   detailsOpened = true;
-  const rate = value => value ? bytes(value, true) : '—';
   const row = element('div', {class:'list-entry'}, element('strong', {text:'Connection status'}),
     element('p', {class:'note', id:'detail-current', text:phases[state.phase]}));
   const progress = note(downloadResult || 'Downloads up to 3 MB through the active VPN.');
-  const test = button('↓ Test download', async () => {
+  const test = element('button', {type:'button', class:'text-button icon-text', click:async () => {
     test.disabled = true;
     progress.textContent = 'Measuring…';
     try {
       const measured = await request('download');
-      downloadResult = bytes(measured.bytes, false) + ' · ' + rate(measured.bytes * 1000 / measured.ms);
+      downloadResult = formatBytes(measured.bytes) + ' · ' + bytesPerSecond(measured.bytes * 1000 / measured.ms);
       progress.textContent = downloadResult;
     } catch (failure) { progress.textContent = safeError(failure); }
     finally { test.disabled = false; }
-  }, 'text-button');
+  }}, icon('down'), 'Test download');
   show('Connection details', row,
-    group('Traffic this session', note('Downloaded ' + bytes(state.down) + ' · Uploaded ' + bytes(state.up)),
+    group('Traffic this session', element('p', {class:'note', id:'detail-traffic', text:sessionTraffic()}),
       test, progress),
-    option('↻', 'Refresh live latency', () => { fire('live'); toast('Checking the active server…'); }),
-    option('○', 'Exit IP history', () => history(state.profileId || db.selectedId)),
-    option('▤', 'Copy diagnostics', diagnostics));
+    option('activity', 'Refresh live latency', () => { fire('live'); toast('Checking the active server…'); }),
+    option('history', 'Exit IP history', () => history(state.profileId || db.selectedId)),
+    option('clipboard', 'Copy diagnostics', diagnostics));
 }
 function diagnostics() {
   detailsOpened = false;
   const platform = 'Android VPN';
   const message = [
-    'SimpleRAY 0.2.0-beta.1', platform,
+    'SimpleRAY 0.2.0-beta.2', platform,
     'Status: ' + (phases[state.phase] || 'Unknown'),
     'Profile type: ' + (rowById(state.profileId || db.selectedId)?.type || 'None'),
     'VPN mode: ' + preferences.routing.appMode,
@@ -901,12 +1111,13 @@ $('source-picker').addEventListener('click', chooseSource);
 $('details').addEventListener('click', details);
 $('clear-selection').addEventListener('click', () => { selection.clear(); renderRows(); });
 $('remove-selection').addEventListener('click', () => confirmRemove([...selection]));
-$('ping-selection').addEventListener('click', () => {
-  const rows = records.filter(row => selection.has(row.id));
+$('ping-all').addEventListener('click', () => {
+  if (measuring.size) { cancelPing(); return; }
+  const rows = selection.size ? records.filter(row => selection.has(row.id)) : getRows();
   selection.clear();
   ping(rows);
 });
-$('ping-all').addEventListener('click', () => measuring.size ? cancelPing() : ping(getRows(true)));
+$('suggestion').querySelector('button').addEventListener('click', () => fire(state.suggestion ? 'switch' : 'undo'));
 $('connect').addEventListener('click', () => state.running ? fire('disconnect') : connect());
 for (const item of document.querySelectorAll('[data-filter]'))
   item.addEventListener('click', () => setFilter(item.dataset.filter));
@@ -915,7 +1126,8 @@ setColors();
 sync();
 poll();
 if (native) {
-  setInterval(poll, 750);
+  setInterval(poll, 1000);
+  document.addEventListener('visibilitychange', poll);
   setInterval(scheduledRefresh, 60_000);
   setTimeout(scheduledRefresh, 7000);
 }

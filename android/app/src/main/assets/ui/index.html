@@ -5,48 +5,56 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="color-scheme" content="light dark">
-  <link rel="stylesheet" href="palettes.css">
+  <link rel="stylesheet" href="../shared/palettes.css">
   <link rel="stylesheet" href="mobile.css">
   <title>SimpleRAY</title>
   <script type="module" src="main.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img src="logo.png" width="38" height="38" alt=""><h1>SimpleRAY</h1></div>
+    <div class="brand">
+      <svg class="brand-logo" aria-hidden="true"><use href="../shared/icons.svg#icon-brand"/></svg>
+      <h1>SimpleRAY</h1>
+    </div>
     <div id="top-actions" class="inline">
       <button class="icon" type="button" id="search-button" aria-label="Search servers">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button>
+        <svg aria-hidden="true"><use href="../shared/icons.svg#icon-search"/></svg>
+      </button>
       <button class="icon" type="button" id="add-button" aria-label="Add configuration">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        <svg aria-hidden="true"><use href="../shared/icons.svg#icon-plus"/></svg>
+      </button>
       <button class="icon" type="button" id="settings-button" aria-label="Settings">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M10 3h4l.6 2.8 2 .8 2.4-1.6 2 3.5-2 2 .2 2.3 2 1.8-2 3.4-2.7-1-2 .9-.6 3.1h-4l-.6-3.1-2-.9-2.7 1-2-3.4 2-1.8.2-2.3-2-2 2-3.5 2.4 1.6 2-.8z"/></svg></button>
+        <svg aria-hidden="true"><use href="../shared/icons.svg#icon-settings"/></svg>
+      </button>
     </div>
     <div id="selection-actions" class="inline" hidden>
-      <button type="button" id="ping-selection">Ping</button>
       <button type="button" id="remove-selection">Remove</button>
-      <button type="button" class="icon close-icon" id="clear-selection" aria-label="Clear selection">×</button>
+      <button type="button" class="icon" id="clear-selection" aria-label="Clear selection">
+        <svg aria-hidden="true"><use href="../shared/icons.svg#icon-close"/></svg>
+      </button>
     </div>
   </header>
   <main>
     <section class="connection" aria-label="Connection">
-      <div class="status-text" id="status" data-phase="disconnected" role="status"><i></i><span>Disconnected</span></div>
+      <div class="connection-header">
+        <div class="status-text" id="status" data-phase="disconnected" role="status"><i></i><span>Disconnected</span></div>
+        <button type="button" class="text-button" id="details" hidden>Details</button>
+      </div>
       <div class="connection-name" id="connection-name" dir="auto">No server selected</div>
       <div class="connection-data" id="connection-data" hidden>
-        <span id="live-latency"></span><span id="transfer"></span>
-      </div>
-      <button class="connect" type="button" id="connect" disabled>Connect</button>
-      <div class="inline connection-footer" id="connection-footer" hidden>
-        <span id="rates"></span><button type="button" class="text-button" id="details">Details</button>
+        <span class="metric download" title="Download speed"><svg aria-hidden="true"><use href="../shared/icons.svg#icon-down"/></svg><strong id="rate-down"></strong></span>
+        <span class="metric upload" title="Upload speed"><svg aria-hidden="true"><use href="../shared/icons.svg#icon-up"/></svg><strong id="rate-up"></strong></span>
+        <span class="metric latency" title="Live latency"><svg aria-hidden="true"><use href="../shared/icons.svg#icon-activity"/></svg><strong id="live-latency"></strong></span>
+        <span id="transfer"></span>
       </div>
       <div class="suggestion" id="suggestion" hidden><span></span><button type="button"></button></div>
     </section>
     <section class="server-section" aria-label="Servers">
       <div class="list-heading">
         <h2>Servers</h2>
-        <div class="inline">
-          <button type="button" class="text-button" id="ping-all" disabled>↻&nbsp; Ping all</button>
-          <button type="button" class="icon dots" id="list-options" aria-label="Server list options">⋮</button>
-        </div>
+        <button type="button" class="icon dots" id="list-options" aria-label="Server list options">
+          <svg aria-hidden="true"><use href="../shared/icons.svg#icon-more"/></svg>
+        </button>
       </div>
       <div id="search-wrap" class="search-wrap" hidden>
         <input id="search" type="search" placeholder="Search name, protocol or subscription" aria-label="Search servers" autocomplete="off">
@@ -55,18 +63,32 @@
         <button type="button" data-filter="all" aria-pressed="true">All</button>
         <button type="button" data-filter="pinned" aria-pressed="false">Pinned</button>
         <button type="button" data-filter="favorite" aria-pressed="false">Favorites</button>
-        <button type="button" id="source-picker" hidden>Subscriptions</button>
+        <button type="button" id="source-picker" aria-pressed="false" aria-haspopup="dialog">
+          <span>Subscriptions</span><svg aria-hidden="true"><use href="../shared/icons.svg#icon-chevron"/></svg>
+        </button>
       </div>
       <div class="server-list" id="server-list" role="list"></div>
       <div id="empty" class="empty">
         <strong>Add your first server</strong><p>Import a config or subscription to connect.</p>
-        <button type="button" class="text-button" id="empty-add">＋ Add config</button>
+        <button type="button" class="text-button" id="empty-add">Add config</button>
       </div>
     </section>
   </main>
+  <footer class="action-bar" aria-label="Server actions">
+    <div class="action-bar-inner">
+      <button class="connect" type="button" id="connect" disabled>
+        <svg aria-hidden="true"><use href="../shared/icons.svg#icon-power"/></svg><span>Connect</span>
+      </button>
+      <button class="ping-action" type="button" id="ping-all" disabled>
+        <svg aria-hidden="true"><use href="../shared/icons.svg#icon-activity"/></svg><span>Ping all</span>
+      </button>
+    </div>
+  </footer>
   <dialog id="sheet" class="sheet" aria-label="Options">
-    <div class="sheet-handle" aria-hidden="true"></div>
-    <div class="sheet-title"><h2 id="sheet-title"></h2><button class="icon close-icon" type="button" id="sheet-close" aria-label="Close">×</button></div>
+    <button class="sheet-handle" id="sheet-handle" type="button" aria-label="Dismiss options"></button>
+    <div class="sheet-title"><h2 id="sheet-title"></h2><button class="icon" type="button" id="sheet-close" aria-label="Close" autofocus>
+      <svg aria-hidden="true"><use href="../shared/icons.svg#icon-close"/></svg>
+    </button></div>
     <div id="sheet-body" class="sheet-body"></div>
   </dialog>
   <div id="toast" role="status" aria-live="polite" hidden></div>

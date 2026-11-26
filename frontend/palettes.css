@@ -96,3 +96,7 @@
   --panelHi:color-mix(in srgb,var(--custom-primary) 29%,var(--tint-base));
   --blue:var(--accessible-custom-accent);
 }
+.theme-swatch{background:#247fd0}
+:is(.jade .theme-swatch,.theme-swatch.jade){background:#208f78}
+:is(.violet .theme-swatch,.theme-swatch.violet){background:#7954be}
+:is(.custom .theme-swatch,.theme-swatch.custom){background:linear-gradient(140deg,#3a85ff,#9561da 52%,#ee8e87)}

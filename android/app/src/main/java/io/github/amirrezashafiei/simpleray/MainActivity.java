@@ -13,8 +13,6 @@ import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
-import android.net.ConnectivityManager;
-import android.net.NetworkCapabilities;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
@@ -28,16 +26,22 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import androidx.core.content.FileProvider;
 import com.google.zxing.integration.android.IntentIntegrator;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONArray;
@@ -45,14 +49,18 @@ import org.json.JSONObject;
 
 public final class MainActivity extends Activity {
     private static final String ORIGIN = "https://appassets.androidplatform.net";
-    private static final int VPN = 67, FILE = 68;
+    private static final int VPN = 67, FILE = 68, OPEN_BACKUP = 70, SAVE_BACKUP = 71;
+    private static final String BACKUP_MIME = "application/json";
+    private static final int BACKUP_CAP = 25_000_000;
     private static final int CAP = 2_000_000;
     private final ExecutorService worker = Executors.newFixedThreadPool(3);
     private WebView web;
     private FrameLayout root;
     private SecureStore store;
     private JSONObject awaitingConsent;
-    private String pendingShared;
+    private String pendingShared, pendingBackup;
+    private Uri backupDestination;
+    private boolean backupDestinationAnnounced;
     private boolean ready, coldStart;
     private long lastTest = 0;
 
@@ -85,7 +93,7 @@ public final class MainActivity extends Activity {
                 }
                 try {
                     String mime = path.endsWith(".js") ? "application/javascript" : path.endsWith(".css") ? "text/css"
-                            : path.endsWith(".png") ? "image/png" : "text/html";
+                            : path.endsWith(".svg") ? "image/svg+xml" : "text/html";
                     return new WebResourceResponse(mime, "UTF-8", getAssets().open(path.substring(1)));
                 } catch (Exception missing) { return empty(); }
             }
@@ -99,6 +107,7 @@ public final class MainActivity extends Activity {
             }
         });
         web.addJavascriptInterface(new Bridge(), "SimpleRayNative");
+        if (saved != null) backupDestination = saved.getParcelable("backupDestination");
         takeShared(getIntent());
         web.loadUrl(ORIGIN + "/ui/index.html");
     }
@@ -160,8 +169,18 @@ public final class MainActivity extends Activity {
         deliverPending();
     }
 
+    @SuppressWarnings("deprecation")
     private void takeShared(Intent intent) {
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
+        Uri document = Build.VERSION.SDK_INT >= 33 ? intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class)
+                : intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (document == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0)
+            document = intent.getClipData().getItemAt(0).getUri();
+        if (document != null && "content".equals(document.getScheme())) {
+            readDocument(document, true);
+            setIntent(new Intent(this, MainActivity.class));
+            return;
+        }
         CharSequence value = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
         if (value == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0) {
             value = intent.getClipData().getItemAt(0).getText();
@@ -171,10 +190,46 @@ public final class MainActivity extends Activity {
     }
 
     private void deliverPending() {
-        if (ready && pendingShared != null) {
+        if (!ready) return;
+        if (pendingShared != null) {
             event("import", pendingShared);
             pendingShared = null;
         }
+        if (pendingBackup != null) {
+            event("backup", pendingBackup);
+            pendingBackup = null;
+        }
+        if (backupDestination != null && !backupDestinationAnnounced) {
+            backupDestinationAnnounced = true;
+            event("backupDestination", true);
+        }
+    }
+
+    private void readDocument(Uri document, boolean backup) {
+        worker.execute(() -> {
+            String content;
+            try (InputStream input = getContentResolver().openInputStream(document)) {
+                if (input == null) throw new IllegalStateException();
+                content = readBounded(input, backup ? BACKUP_CAP : CAP);
+            } catch (Exception failure) {
+                if (!backup) {
+                    event("notice", "Could not read the selected configuration file.");
+                    return;
+                }
+                content = "";
+            }
+            String value = content;
+            runOnUiThread(() -> {
+                if (backup) pendingBackup = value;
+                else pendingShared = value;
+                deliverPending();
+            });
+        });
+    }
+
+    @Override protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putParcelable("backupDestination", backupDestination);
     }
 
     @Override @SuppressWarnings("deprecation")
@@ -192,14 +247,13 @@ public final class MainActivity extends Activity {
             awaitingConsent = null;
             if (resultCode == RESULT_OK && plan != null) launchVpn(plan);
             else event("notice", "VPN permission was not granted.");
-        } else if (requestCode == FILE && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            Uri file = data.getData();
-            worker.execute(() -> {
-                try (InputStream input = getContentResolver().openInputStream(file)) {
-                    if (input == null) throw new IllegalStateException();
-                    event("import", readBounded(input));
-                } catch (Exception failure) { event("notice", "Could not read the selected configuration file."); }
-            });
+        } else if (requestCode == FILE || requestCode == OPEN_BACKUP || requestCode == SAVE_BACKUP) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+            if (requestCode == SAVE_BACKUP) {
+                backupDestination = data.getData();
+                backupDestinationAnnounced = false;
+                deliverPending();
+            } else readDocument(data.getData(), requestCode == OPEN_BACKUP);
         } else {
             var scan = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
             if (scan != null && scan.getContents() != null) event("import", scan.getContents());
@@ -247,23 +301,25 @@ public final class MainActivity extends Activity {
 
     private JSONArray apps() {
         var launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
-        var packages = new ArrayList<>(getPackageManager().queryIntentActivities(launcher, 0));
-        packages.sort(Comparator.comparing(app -> app.loadLabel(getPackageManager()).toString(), String.CASE_INSENSITIVE_ORDER));
-        java.util.HashSet<String> seen = new java.util.HashSet<>();
-        JSONArray result = new JSONArray();
-        for (ResolveInfo app : packages) {
+        var packageManager = getPackageManager();
+        var labels = new java.util.HashMap<String, String>();
+        for (ResolveInfo app : packageManager.queryIntentActivities(launcher, 0)) {
             String id = app.activityInfo.packageName;
-            if (id.equals(getPackageName()) || !seen.add(id)) continue;
-            result.put(Core.object("id", id, "label", app.loadLabel(getPackageManager()).toString()));
+            if (!id.equals(getPackageName()))
+                labels.computeIfAbsent(id, ignored -> app.loadLabel(packageManager).toString());
         }
+        var entries = new ArrayList<>(labels.entrySet());
+        entries.sort(java.util.Map.Entry.comparingByValue(String.CASE_INSENSITIVE_ORDER));
+        JSONArray result = new JSONArray();
+        for (var entry : entries) result.put(Core.object("id", entry.getKey(), "label", entry.getValue()));
         return result;
     }
 
-    private static String readBounded(InputStream input) throws Exception {
+    private static String readBounded(InputStream input, int limit) throws Exception {
         byte[] buffer = new byte[8192];
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         for (int n; (n = input.read(buffer)) != -1;) {
-            if (output.size() + n > CAP) throw new IllegalArgumentException("Data is over 2 MB");
+            if (output.size() + n > limit) throw new IllegalArgumentException("File is too large");
             output.write(buffer, 0, n);
         }
         return output.toString(StandardCharsets.UTF_8.name()).replaceFirst("^\ufeff", "");
@@ -291,11 +347,56 @@ public final class MainActivity extends Activity {
                     url = next;
                 } else {
                     if (code < 200 || code >= 300) throw new IllegalStateException("Subscription returned HTTP " + code);
-                    try (InputStream stream = connection.getInputStream()) { return readBounded(stream); }
+                    try (InputStream stream = connection.getInputStream()) { return readBounded(stream, CAP); }
                 }
             } finally { connection.disconnect(); }
         }
         throw new IllegalStateException("Subscription redirect limit reached");
+    }
+
+    private static String backupName() {
+        return "SimpleRAY-Backup-" + LocalDateTime.now().format(
+                DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss", Locale.ROOT)) + ".json";
+    }
+
+    private static byte[] backupBytes(String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length == 0 || bytes.length > BACKUP_CAP) throw new IllegalArgumentException("Backup is too large");
+        return bytes;
+    }
+
+    private void writeBackup(String id, Uri destination, String text) {
+        try {
+            byte[] bytes = backupBytes(text);
+            try (OutputStream stream = getContentResolver().openOutputStream(destination, "wt")) {
+                if (stream == null) throw new IllegalStateException();
+                stream.write(bytes);
+            }
+            response(id, true);
+        } catch (Exception failure) { error(id, "Could not save this backup file."); }
+    }
+
+    private void shareBackup(String id, String text) {
+        try {
+            File directory = new File(getCacheDir(), "portable-backups");
+            Files.createDirectories(directory.toPath());
+            File[] old = directory.listFiles();
+            long previousDay = System.currentTimeMillis() - 86_400_000;
+            if (old != null) for (File file : old) {
+                if (file.lastModified() < previousDay) file.delete();
+            }
+            File file = new File(directory, backupName());
+            Files.write(file.toPath(), backupBytes(text));
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".backups", file);
+            Intent share = new Intent(Intent.ACTION_SEND).setType(BACKUP_MIME).putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            share.setClipData(ClipData.newUri(getContentResolver(), "SimpleRAY backup", uri));
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                startActivity(Intent.createChooser(share, "Share SimpleRAY backup"));
+                response(id, true);
+            });
+        } catch (Exception failure) { error(id, "Could not share this backup file."); }
     }
 
     private void event(String type, Object value) {
@@ -311,6 +412,8 @@ public final class MainActivity extends Activity {
     private void error(String id, String message) { event("response", Core.object("id", id, "error", message)); }
 
     public final class Bridge {
+        @JavascriptInterface public String status() { return RayVpn.status().toString(); }
+
         @JavascriptInterface public String get(String key) {
             try { return store.read(key); }
             catch (Exception error) { return "#unreadable"; }
@@ -319,16 +422,6 @@ public final class MainActivity extends Activity {
         @JavascriptInterface public boolean set(String key, String value) {
             try { store.write(key, value); return true; }
             catch (Exception error) { return false; }
-        }
-
-        @JavascriptInterface public String connection() {
-            try {
-                JSONObject result = new JSONObject(RayVpn.status().toString());
-                ConnectivityManager manager = getSystemService(ConnectivityManager.class);
-                NetworkCapabilities network = manager.getNetworkCapabilities(manager.getActiveNetwork());
-                result.put("wifi", network != null && network.hasTransport(NetworkCapabilities.TRANSPORT_WIFI));
-                return result.toString();
-            } catch (Exception unknown) { return RayVpn.status().toString(); }
         }
 
         @JavascriptInterface public void request(String id, String action, String input) {
@@ -343,10 +436,24 @@ public final class MainActivity extends Activity {
                     case "policy" -> RayVpn.setPolicy(data);
                     case "tile" -> runOnUiThread(MainActivity.this::tile);
                     case "bars" -> runOnUiThread(() -> applyBars(data.optBoolean("dark"), data.optString("color")));
+                    case "notificationSettings" -> runOnUiThread(() -> startActivity(
+                            new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName())));
                     case "vpnSettings" -> runOnUiThread(() -> startActivity(new Intent(Settings.ACTION_VPN_SETTINGS)));
                     case "scan" -> runOnUiThread(() -> new IntentIntegrator(MainActivity.this)
                             .setDesiredBarcodeFormats(IntentIntegrator.QR_CODE).setOrientationLocked(false)
                             .setPrompt("Scan a server or subscription QR code").initiateScan());
+                    case "openBackup" -> runOnUiThread(() -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                            .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), OPEN_BACKUP));
+                    case "saveBackup" -> runOnUiThread(() -> startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                            .addCategory(Intent.CATEGORY_OPENABLE).setType(BACKUP_MIME)
+                            .putExtra(Intent.EXTRA_TITLE, backupName()), SAVE_BACKUP));
+                    case "writeBackup" -> runOnUiThread(() -> {
+                        Uri destination = backupDestination;
+                        backupDestination = null;
+                        if (destination == null) error(id, "Select a file to save the backup.");
+                        else worker.execute(() -> writeBackup(id, destination, data.optString("text")));
+                    });
+                    case "shareBackup" -> worker.execute(() -> shareBackup(id, data.optString("text")));
                     case "file" -> runOnUiThread(() -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
                             .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), FILE));
                     case "clipboard" -> runOnUiThread(() -> {

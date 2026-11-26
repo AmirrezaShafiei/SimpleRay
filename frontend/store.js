@@ -19,10 +19,6 @@ function sanitizedName(name,defaultName='Untitled'){
   if(!value && !defaultName)throw new Error('A name is required');
   return value||defaultName;
 }
-function sourceOf(s,subscriptions){
-  if(!s.subscriptionId)return '—';
-  return subscriptions.find(x=>x.id===s.subscriptionId)?.name||'—';
-}
 function endpointKey(value) {
   return JSON.stringify(value, (_key, child) => {
     if (child && typeof child === 'object' && !Array.isArray(child)) {
@@ -42,7 +38,13 @@ export function createRepository(storage,{idFactory=id}={}){
   try{const raw=storage.getItem(STORAGE_KEY);database=raw?checkDocument(JSON.parse(raw)):fresh()}
   catch{database=fresh();loadError='Saved configurations could not be loaded; the original data has not been overwritten.'}
   const snapshot=()=>clone(database);
-  const rows=()=>database.servers.map(s=>({...clone(s),source:sourceOf(s,database.subscriptions)}));
+  const rows=()=>{
+    const names = new Map(database.subscriptions.map(sub => [sub.id, sub.name]));
+    return clone(database.servers).map(server => {
+      server.source = (server.subscriptionId && names.get(server.subscriptionId)) || '—';
+      return server;
+    });
+  };
   const save=next=>{
     if(loadError)throw new Error('Storage is read-only because the saved database needs recovery');
     next.version=VERSION;
@@ -80,6 +82,9 @@ export function createRepository(storage,{idFactory=id}={}){
   return {
     get loadError(){return loadError},
     snapshot,rows,
+    restoreProfiles({servers, subscriptions, selectedId}) {
+      return save(checkDocument({version:VERSION, servers, subscriptions, selectedId}));
+    },
     setSelected(serverId){return transact(next=>{if(!next.servers.some(s=>s.id===serverId))throw new Error('Server not found');next.selectedId=serverId})},
     renameServer(serverId, name){
       const displayName = sanitizedName(name, '');

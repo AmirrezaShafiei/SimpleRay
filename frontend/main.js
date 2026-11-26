@@ -39,7 +39,7 @@ const trayPanel={visible:false,lastSnapshot:'',lastServer:null,mode:'systemProxy
 
 
 function icon(name){
-  return `<svg class="ui-icon" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
+  return `<svg class="ui-icon" aria-hidden="true"><use href="./icons.svg#icon-${name}"/></svg>`;
 }
 
 function initWindowChrome(){
