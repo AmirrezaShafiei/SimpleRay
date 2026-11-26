@@ -1,0 +1,94 @@
+name: Publish SimpleRAY Android 0.2.0-beta.2
+
+on:
+  push:
+    branches: [build/android-0.2.0-beta.2]
+    paths: [android/release/beta2-assets.json]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-0.2.0-beta.2-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_COMMIT: 5ec01b13dfb5848f8548ba1ae4a15ae32f7bd510
+      TAG: android-v0.2.0-beta.2
+      APK: SimpleRAY-Android-0.2.0-beta.2.apk
+      PREVIEW: SimpleRAY-Android-0.2.0-beta.2-Side-by-side.apk
+
+    steps:
+      - name: Recover the signed APKs
+        shell: bash
+        run: |
+          gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GH_REPO/contents/android/release/beta2-assets.json?ref=$GITHUB_SHA" > manifest.json
+          jq -e '.apk | type == "array" and length > 0 and all(.[]; test("^[0-9a-f]{40}$"))' manifest.json >/dev/null
+          jq -e '.previewPatch | test("^[0-9a-f]{40}$")' manifest.json >/dev/null
+          get_blob() {
+            gh api "repos/$GH_REPO/git/blobs/$1" --jq .content | base64 --decode
+          }
+          mapfile -t apk_blobs < <(jq -r '.apk[]' manifest.json)
+          for blob in "${apk_blobs[@]}"; do
+            get_blob "$blob"
+          done > "$APK"
+          get_blob "$(jq -r .previewPatch manifest.json)" > preview.patch.zst
+          zstd -q -d --patch-from="$APK" preview.patch.zst -o "$PREVIEW"
+
+          cat > SHA256SUMS.txt <<'HASHES'
+          31f737df6258a0797b391273642984838a36a7f7c8f78d3e735b43d0a1e8e2c8  SimpleRAY-Android-0.2.0-beta.2.apk
+          3d37d401589510a9f06ec6c84c2cb5cff65bbc16564af53233bae1da8f45be10  SimpleRAY-Android-0.2.0-beta.2-Side-by-side.apk
+          HASHES
+          sha256sum --check SHA256SUMS.txt
+
+      - name: Check package identities and signatures
+        shell: bash
+        run: |
+          build_tools="$ANDROID_HOME/build-tools/35.0.0"
+          if [[ ! -x "$build_tools/apksigner" ]]; then
+            sdkmanager 'build-tools;35.0.0'
+          fi
+          for apk in "$APK" "$PREVIEW"; do
+            "$build_tools/apksigner" verify --print-certs "$apk" \
+              | grep -Fx 'Signer #1 certificate SHA-256 digest: 0b8711dfca38939eec39a7240c66d54c5afbe5dd202679931e29c2c417288ef1'
+            "$build_tools/aapt" dump badging "$apk" > badging.txt
+            package=io.github.amirrezashafiei.simpleray.mobile
+            if [[ $apk == "$PREVIEW" ]]; then
+              package+=.preview
+            fi
+            grep -F "package: name='$package' versionCode='3' versionName='0.2.0-beta.2'" badging.txt
+            grep -Fx "sdkVersion:'29'" badging.txt
+            grep -Fx "native-code: 'arm64-v8a' 'x86_64'" badging.txt
+          done
+
+      - name: Publish Android prerelease
+        shell: bash
+        run: |
+          cat > release-notes.md <<'NOTES'
+          SimpleRAY for Android 10 and newer. Both APKs support ARM64 and x86-64.
+
+          ### Choose your APK
+
+          - **Standard APK** — for a fresh installation.
+          - **Side-by-side APK** — installs as **SimpleRAY Preview** beside earlier builds. The standard APK uses a different signing key from 0.2.0-beta.1 and cannot update that build in place. The earlier app keeps its existing profile data.
+
+          ### Changes
+
+          - Shared SimpleRAY logo, icons and palettes, with Connect and Ping in the fixed bottom bar.
+          - Swipe down on a bottom sheet handle to close it, and filter servers by subscription.
+          - **Settings → Data → Portable Backup** saves, shares and restores servers, subscriptions, favorites, and pins. Treat backup files as private because they contain server credentials.
+          - Connection notifications show live latency and download rates. Large server lists update ping results without rebuilding the full list.
+
+          ### Verification
+
+          The 88 source tests, Android build and lint, browser-based mobile interface smoke test, and local Xray traffic fixture passed. Both attached APKs are debug-signed beta builds. Physical Android device measurements for the VPN notification and download rate are pending.
+          NOTES
+          gh release create "$TAG" "$APK" "$PREVIEW" SHA256SUMS.txt \
+            --target "$SOURCE_COMMIT" --latest=false --prerelease \
+            --title 'SimpleRAY Android 0.2.0-beta.2' --notes-file release-notes.md
