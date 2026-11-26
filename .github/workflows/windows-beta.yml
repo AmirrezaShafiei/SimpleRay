@@ -2,7 +2,7 @@ name: SimpleRay Windows build
 
 on:
   push:
-    branches: [main, build/simpleray-1.2.5, build/simpleray-1.2.5-beta]
+    branches: [main, build/simpleray-1.2.5, build/simpleray-1.2.5-beta, build/simpleray-1.2.6]
     paths:
       - 'frontend/**'
       - 'src-tauri/**'
@@ -98,7 +98,7 @@ jobs:
           if ($env:GITHUB_REF -eq 'refs/heads/build/simpleray-1.2.5') {
             $previousVersion = '1.2.3'
             $expectedHash = 'ed98b254f600baaa1b602877d13d127ce74cbaa96cd8bd2a082d514f1e5a9926'
-          } elseif ($env:GITHUB_REF -eq 'refs/heads/build/simpleray-1.2.5-beta') {
+          } elseif ($env:GITHUB_REF -in 'refs/heads/build/simpleray-1.2.5-beta', 'refs/heads/build/simpleray-1.2.6') {
             $previousVersion = '1.2.5'
             $expectedHash = '0faaccd63cfad926530410d57beae04c875d317556e37098237df74589532994'
           }
@@ -175,8 +175,8 @@ jobs:
               Start-Sleep -Seconds 1
             }
             if ($actualStartup -ne $expectedStartup) { throw "Start with Windows was not registered by default: $actualStartup" }
-            node scripts/tray-webview-smoke.mjs $debugPort
-            if ($LASTEXITCODE -ne 0) { throw 'Installed tray WebView checks failed' }
+            node scripts/windows-webview-smoke.mjs $debugPort
+            if ($LASTEXITCODE -ne 0) { throw 'Installed Windows WebView checks failed' }
             $second = Start-Process -FilePath $exe -PassThru
             try {
               if (!$second.WaitForExit(10000)) { throw 'Second instance did not exit' }
@@ -272,6 +272,25 @@ jobs:
           $notes = 'Windows x64 beta. Manual connections have a 12-second confirmation window after Xray is ready. A second endpoint starts after 2 seconds. Cancel or choose another server from the main window or tray while a connection is pending.'
           gh release create v1.2.5.beta $asset $checksumFile --target $env:GITHUB_SHA --title 'SimpleRAY 1.2.5.beta (Windows x64)' --prerelease --latest=false --notes $notes
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish the tested beta installer' }
+      - name: Publish SimpleRAY 1.2.6
+        if: github.ref == 'refs/heads/build/simpleray-1.2.6'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $current = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/build/simpleray-1.2.6" --jq .object.sha
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify the stable build commit' }
+          if ($current -ne $env:GITHUB_SHA) { Write-Host 'This build was superseded'; exit 0 }
+          $version = 'v' + (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($version -ne 'v1.2.6') { throw "Unexpected stable version: $version" }
+          $installer = Get-Item -LiteralPath 'src-tauri/target/release/bundle/nsis/SimpleRay_1.2.6_x64-setup.exe'
+          $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumFile = Join-Path $installer.DirectoryName 'SHA256SUMS.txt'
+          "$checksum  $($installer.Name)" | Set-Content -LiteralPath $checksumFile -Encoding ascii
+          $notes = 'The connection switch shows a hatched thumb while connecting. Click it again to cancel, or choose another server. Manual confirmation has a 12-second window after Xray is ready, with a second endpoint after 2 seconds.'
+          gh release create $version $installer.FullName $checksumFile --target $env:GITHUB_SHA --title 'SimpleRAY 1.2.6 (Stable, Windows x64)' --latest --notes $notes
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish the tested stable installer' }
       - name: Publish beta pre-release after successful build and tests
         if: github.ref == 'refs/heads/main'
         shell: pwsh

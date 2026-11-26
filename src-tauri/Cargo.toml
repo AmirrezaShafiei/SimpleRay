@@ -1,6 +1,6 @@
 [package]
 name = "simpleray"
-version = "1.2.5-beta"
+version = "1.2.6"
 description = "SimpleRay minimal Windows Xray client"
 authors = ["SimpleRay contributors"]
 license = "MIT"

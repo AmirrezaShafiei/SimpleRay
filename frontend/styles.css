@@ -188,8 +188,13 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .connection-panel.connecting .state-led{background:var(--yellow);box-shadow:0 0 12px #d9a54866;}
 .toggle:disabled{opacity:.64;cursor:not-allowed;}
 .toggle:disabled:hover{filter:none;}
-.toggle-cancel,.toggle[data-cancellable=true] .toggle-thumb{display:none;}
-.toggle[data-cancellable=true] .toggle-cancel{display:inline;color:#fff;font-size:13px;font-weight:600;}
+.toggle[data-cancellable=true] .toggle-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: repeating-linear-gradient(135deg, rgb(71 83 111 / 30%) 0 1px, transparent 1px 5px);
+}
 #downRate,#upRate{font-variant-numeric:tabular-nums;min-width:70px;}
 #pingAllButton[aria-busy=true]{border-color:var(--selectedBorder);}
 

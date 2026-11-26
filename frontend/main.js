@@ -207,6 +207,7 @@ function renderConnection(){
     control.setAttribute('aria-checked',String(Boolean(session)));
   }
   control.setAttribute('aria-label',pendingConnection?'Cancel connection':session?'Disconnect':'Connect');
+  control.title=pendingConnection?'Cancel connection':'';
   const unhealthy=(health?.consecutiveFailures??0)>=2;
   const status=state.connectionBusy||(unhealthy&&session?'Server not responding':connected?'Connected':'Disconnected');
   $('connectionState').textContent=status;
